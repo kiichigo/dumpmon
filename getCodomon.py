@@ -59,6 +59,7 @@ class Dumpmon(object):
             os.mkdir(_DATA)
         if not p.isdir(_ID_DIR):
             os.mkdir(_ID_DIR)
+
     def loadConf(self):
         fn = p.join(self.datadir, "config.json")
         if p.isfile(fn):
@@ -96,9 +97,21 @@ class Dumpmon(object):
         with open(p.join(self.datadir, "cookie.dat"), 'rb') as f:
             self.session.cookies.update(pickle.load(f))
 
-    def getTimeline(self, page=1, service_id=1183):
+    def services(self):
+        u"""
+        https://ps-api.codmon.com/api/v2/parent/services/?use_image_edge=true&__env__=myapp
+        """
+        url = _API_URL + "/services"
+        res = self.session.get(url)
+        if res.status_code != 200:
+            raise RuntimeError("%r" % res)
+        resj = res.json()
+        assert(resj["success"])
+        return resj["data"]
+
+    def getTimeline(self, page, service_id):
         fmt = _API_URL + "/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp" 
-        url = _TOP_URL + fmt % (service_id, int(page))
+        url = fmt % (int(page), service_id)
         return self.session.get(url)
 
     def getHandouts(self, page=1):
@@ -271,8 +284,6 @@ def templist():
 
 
 def main():
-
-
     c = Dumpmon()
     try:
         c.loadCookie()
