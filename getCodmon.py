@@ -11,6 +11,9 @@ import textwrap
 from time import sleep
 import sys
 import pathlib
+import logging
+
+log = logging.getLogger()
 
 def get_datadir() -> pathlib.Path:
 
@@ -109,10 +112,39 @@ class Dumpmon(object):
         assert(resj["success"])
         return resj["data"]
 
-    def getTimeline(self, page, service_id):
+    def getTimeline(self, service_id, page):
         fmt = _API_URL + "/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp" 
-        url = fmt % (int(page), service_id)
-        return self.session.get(url)
+        url = fmt % (int(page), int(service_id))
+        res = self.session.get(url)
+        if res.status_code != 200:
+            raise RuntimeError("%r" % res)
+        resj = res.json()
+        if resj["error"]:
+            raise RuntimeError("Error: %r" % res)
+        assert(resj["success"])
+        return resj
+
+    def iterTimeLineItems(self, service_id, start=1, end=10000):
+        for i in range(start, end):
+            sleep(0.5)
+            resj = self.getTimeline(service_id, i)
+            for item in resj["data"]:
+                yield item
+            if not resj["next_page"]:
+                print("LastPage Detected. Finish: %d" % i)
+                return
+    
+    def dumpTimeline(self):
+        srvs = self.services()
+        for sid in srvs.keys():
+            srvfdr = p.join(_DATA, srvs[sid]["name"])
+            if not p.isdir(srvfdr):
+                os.makedirs(srvfdr)
+            for item in self.iterTimeLineItems(sid):
+                itemname = item["id"] + ".json"
+                fn = p.join(srvfdr, itemname)
+                with open(p.join(_ID_DIR, fn), 'w') as f:
+                    json.dump(item, f)
 
     def getHandouts(self, page=1):
         fmt = "https://api-reference-room.codmon.com/v1/handouts/forParents?page=%d"
@@ -256,11 +288,11 @@ def procPage(session, data):
         procItem(session, item)
 
 
-def allpage(session, start=1, end=1000):
-    fmt = "/api/v2/parent/timeline/?listpage=%d&search_type[]=new_all&service_id=1183&current_flag=0&use_image_edge=true&__env__=myapp"
+def allpage(session, sid, start=1, end=1000):
+    fmt = "/api/v2/parent/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp"
     for i in range(start, end):
         sleep(1)
-        url = _TOP_URL + (fmt % i)
+        url = _TOP_URL + (fmt % (i, sid))
         print(url)
         r = session.get(url)
         if r.status_code != 200:
@@ -290,7 +322,8 @@ def main():
     except:
         c.login()
         c.saveCookie()
-    allpage(c.session, 1)
+    c.dumpTimeline()
+    # allpage(c.session, 1)
 
 if __name__ == "__main__":
     main()
