@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import datetime
+from datetime import date, timedelta 
 import getpass
 import json
 import logging
@@ -44,6 +44,10 @@ _DATA = p.expanduser("~/Desktop/dumpmon")
 
 _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
+
+def drange(s, e):
+    days = (e-s).days
+    return [s + timedelta(x) for x in range(0, days, 1 if days >= 0 else -1)]
 
 
 class Dumpmon(object):
@@ -218,14 +222,31 @@ class Dumpmon(object):
         for cmr in self.iterCMR(service_id):
             o_date = cmr["member_open_date"]
             c_date = cmr["member_close_date"]
-            mem = cmr["member_id"]
-            url = ("https://ps-api.codmon.com/api/v2/parent/comments/"
+            if c_date:
+                start = date.fromisoformat(c_date)
+            else:
+                start = date.today()
+            end = date.fromisoformat(o_date)
+
+            fmt = (
+                "https://ps-api.codmon.com/api/v2/parent/comments/"
                 "?search_kind=2"
                 "&relation_id=%(relation_id)d"
                 "&relation_kind=2"
-                "&search_start_display_date=%(date)s"
-                "&search_end_display_date=%(date)s"
-                "&__env__=myapp") % {relation_id: int(mem), date: ""}
+                "&search_start_display_date=%(s_date)s"
+                "&search_end_display_date=%(s_date)s"
+                "&__env__=myapp"
+            )
+
+            for s_date in drange(start, end):
+                mem = cmr["member_id"]
+                url = fmt % {
+                    "relation_id": int(mem), 
+                    "date": s_date.isoformat(,)
+                }
+                return self.get(url)
+
+
 
 class TimelineItem(object):
     def __init__(self, dumpmon, item):
@@ -398,7 +419,7 @@ def main():
     except:
         c.login()
         c.saveCookie()
-    c.dumpTimeline()
+    # c.dumpTimeline()
     # allpage(c.session, 1)
 
 if __name__ == "__main__":
