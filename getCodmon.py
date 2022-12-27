@@ -1,17 +1,19 @@
 #!/usr/bin/python3
-import requests
+
+import datetime
+import getpass
+import json
+import logging
 import os
 import os.path as p
-import re
-import urllib
-import json
+import pathlib
 import pickle
-import getpass
+import re
+import requests
+import sys
 import textwrap
 from time import sleep
-import sys
-import pathlib
-import logging
+import urllib
 
 log = logging.getLogger()
 
@@ -39,7 +41,6 @@ def get_datadir() -> pathlib.Path:
 _THISDIR = p.dirname(__file__)
 
 _DATA = p.expanduser("~/Desktop/dumpmon")
-_ID_DIR = p.join(_DATA, "id")
 
 _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
@@ -60,8 +61,8 @@ class Dumpmon(object):
 
         if not p.isdir(_DATA):
             os.mkdir(_DATA)
-        if not p.isdir(_ID_DIR):
-            os.mkdir(_ID_DIR)
+
+    # --- Config
 
     def loadConf(self):
         fn = p.join(self.datadir, "config.json")
@@ -77,6 +78,8 @@ class Dumpmon(object):
         with open(fn, "w") as f:
             json.dump(conf, f)
         assert(p.isfile(fn))
+
+    # --- Login
 
     def login(self):
         conf = self.loadConf()
@@ -100,6 +103,21 @@ class Dumpmon(object):
         with open(p.join(self.datadir, "cookie.dat"), 'rb') as f:
             self.session.cookies.update(pickle.load(f))
 
+    # --- 
+
+    def get(self, url):
+        res = self.session.get(url)
+        if res.status_code != 200:
+            raise RuntimeError("%r" % res)
+        return res
+
+    def getJson(self, url):
+        res = self.get(url)
+        resj = res.json()
+        if not resj["success"]:
+            raise RuntimeError()
+        return resj["data"]
+
     def services(self):
         u"""
         https://ps-api.codmon.com/api/v2/parent/services/?use_image_edge=true&__env__=myapp
@@ -113,16 +131,10 @@ class Dumpmon(object):
         return resj["data"]
 
     def getTimeline(self, service_id, page):
+        log.info("timeline: %s %s" % (service_id, page))
         fmt = _API_URL + "/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp" 
         url = fmt % (int(page), int(service_id))
-        res = self.session.get(url)
-        if res.status_code != 200:
-            raise RuntimeError("%r" % res)
-        resj = res.json()
-        if resj["error"]:
-            raise RuntimeError("Error: %r" % res)
-        assert(resj["success"])
-        return resj
+        return self.getJson(url)
 
     def iterTimeLineItems(self, service_id, start=1, end=10000):
         for i in range(start, end):
@@ -136,15 +148,32 @@ class Dumpmon(object):
     
     def dumpTimeline(self):
         srvs = self.services()
-        for sid in srvs.keys():
-            srvfdr = p.join(_DATA, srvs[sid]["name"])
-            if not p.isdir(srvfdr):
-                os.makedirs(srvfdr)
-            for item in self.iterTimeLineItems(sid):
-                itemname = item["id"] + ".json"
-                fn = p.join(srvfdr, itemname)
-                with open(p.join(_ID_DIR, fn), 'w') as f:
+        for service_id in srvs.keys():
+            tl_fdr = p.join(_DATA, srvs[service_id]["name"], "timeline")
+            if not p.isdir(tl_fdr):
+                os.makedirs(tl_fdr)
+            for item in self.iterTimeLineItems(service_id):
+                if item["timeline_kind"] == "topics":
+                    itemname = "%(display_date)s_%(id)s.json" % item
+                elif item["timeline_kind"] == "comments":
+                    itemname = "%(display_date)s_%(id)s.json" % item
+                elif item["timeline_kind"] == "responses":
+                    itemname = "%(display_date)s_%(id)s.json" % item
+                elif item["timeline_kind"] == "bills":
+                    itemname = "%(start_date)s_%(id)s.json" % item
+                else:
+                    print(item)
+                    raise RuntimeError("unknown timeline_kind: %s" %  item["timeline_kind"])
+                fn = p.join(tl_fdr, itemname)
+                with open(fn, 'w') as f:
                     json.dump(item, f)
+
+    def iterDumpedTimeline(self, service_id):
+        srvs = self.services()
+        tl_fdr = p.join(_DATA, srvs[service_id]["name"], "timeline")
+        for fn in os.listdir(tl_fdr):
+            with open(p.join(tl_fdr, fn), "r") as f:
+                yield json.load(f)
 
     def getHandouts(self, page=1):
         fmt = "https://api-reference-room.codmon.com/v1/handouts/forParents?page=%d"
@@ -155,59 +184,106 @@ class Dumpmon(object):
     def getSID(self):
         return self.session.cookies["CODMONSESSID"]
 
-def getDLFN(item):
-    return "%(display_date)s [%(title)s]" % item
+    def getChildren(self):
+        """
+        https://ps-api.codmon.com/api/v2/parent/children/
+            ?use_image_edge=true
+            &__env__=myapp
+        """
+        url = "https://ps-api.codmon.com/api/v2/parent/children/"
+        return self.getJson(url)
+
+    def iterCMR(self, service_id=None):
+        u"""
+        child_member_relationsを得る
+        service_idを指定するとそのサービスidに限定する
+        """
+        chil = self.getChildren()
+        for data in chil["data"]:
+            for rel in data["child_member_relations"]:
+                if service_id and rel["service_id"] != service_id:
+                    continue
+                yield rel
+
+    def getComments(self, service_id):
+        """
+        https://ps-api.codmon.com/api/v2/parent/comments/
+            ?search_kind=2
+            &relation_id=
+            &relation_kind=2
+            &search_start_display_date=2022-12-26
+            &search_end_display_date=2022-12-26
+            &__env__=myapp
+        """
+        for cmr in self.iterCMR(service_id):
+            o_date = cmr["member_open_date"]
+            c_date = cmr["member_close_date"]
+            mem = cmr["member_id"]
+            url = ("https://ps-api.codmon.com/api/v2/parent/comments/"
+                "?search_kind=2"
+                "&relation_id=%(relation_id)d"
+                "&relation_kind=2"
+                "&search_start_display_date=%(date)s"
+                "&search_end_display_date=%(date)s"
+                "&__env__=myapp") % {relation_id: int(mem), date: ""}
+
+class TimelineItem(object):
+    def __init__(self, dumpmon, item):
+        self.dumpmon = dumpmon
+        self.item = item
+
+    def getOutputPath(self, *lst):
+        display_date = self.item["display_date"]
+        title = self.item.get("title", "")
+
+        if re.search(r"ねこ|幼児", title):
+            outfolder = p.join(_DATA, "etc")
+        else:
+            m = re.match(r'(\d{4}-\d{2})-\d{2}', display_date)
+            if not m:
+                raise RuntimeError("invalid display_date: %r" % display_date)
+            yyyy_dd = m.group(1)
+            outfolder = p.join(_DATA, yyyy_dd)
+        if not p.isdir(outfolder):
+            os.makedirs(outfolder)
+        return p.join(outfolder, *lst)
+
+    def download(self):
+        if "file_url" not in self.item:
+            return
+        if self.item["file_url"] is None:
+            return
+
+        try:
+            cd = res.headers['Content-Disposition']
+            name = parseContnentDisporition(cd)
+        except Exception:
+            print(self.item)
+            raise
+        
+        fn = ( "%(display_date)s [%(title)s]" % self.item ) + name
+        full = self.getOutputPath(self.item, fn)
+
+        if p.isfile(full):
+            log.info("aleady exists. skip download: %s" % fn)
+
+        url = _TOP_URL + self.item["file_url"]
+        res = self.dumpmon.get(url)
+        sleep(0.5)
+
+
+        with open(full, 'wb') as f:
+            f.write(res.content)
 
 
 def parseContnentDisporition(cd):
-    print(urllib.parse.unquote(cd))
-
+    log.debug(urllib.parse.unquote(cd))
     fns = re.findall(r'filename\*=([\w-]+)\'\'([\w\.%\(\)\+\-]+)$', cd)
     if len(fns) != 1:
         raise RuntimeError("bad cd: %s" % cd)
-
     if len(fns[0]) != 2:
         raise RuntimeError("bad cd: %s" % cd)
-
     return urllib.parse.unquote(fns[0][1])
-
-
-def getOutputPath(item, *lst):
-    display_date = item["display_date"]
-    title = item.get("title", "")
-
-    if re.search(r"ねこ|幼児", title):
-        outfolder = p.join(_DATA, "etc")
-    else:
-        m = re.match(r'(\d{4}-\d{2})-\d{2}', display_date)
-        if not m:
-            raise RuntimeError("invalid display_date: %r" % display_date)
-        yyyy_dd = m.group(1)
-        outfolder = p.join(_DATA, yyyy_dd)
-
-    if not p.isdir(outfolder):
-        os.makedirs(outfolder)
-
-    return p.join(outfolder, *lst)
-
-
-def download(session, item):
-    if "file_url" not in item:
-        return
-    if item["file_url"] is None:
-        return
-    url = _TOP_URL + item["file_url"]
-    r = session.get(url)
-    sleep(0.5)
-    cd = r.headers['Content-Disposition']
-    try:
-        name = parseContnentDisporition(cd)
-    except Exception:
-        print(item)
-        raise
-    fn = getDLFN(item) + " " + name
-    with open(getOutputPath(item, fn), 'wb') as f:
-        f.write(r.content)
 
 
 def renrakuToText(item):
