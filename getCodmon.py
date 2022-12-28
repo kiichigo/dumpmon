@@ -242,7 +242,7 @@ class Dumpmon(object):
                 mem = cmr["member_id"]
                 url = fmt % {
                     "relation_id": int(mem), 
-                    "date": s_date.isoformat(,)
+                    "date": s_date.isoformat(),
                 }
                 return self.get(url)
 
