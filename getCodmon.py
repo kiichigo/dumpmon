@@ -109,8 +109,8 @@ class Dumpmon(object):
 
     # --- 
 
-    def get(self, url):
-        res = self.session.get(url)
+    def get(self, url, headers=None):
+        res = self.session.get(url, headers=headers)
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
         return res
@@ -179,14 +179,47 @@ class Dumpmon(object):
             with open(p.join(tl_fdr, fn), "r") as f:
                 yield json.load(f)
 
-    def getHandouts(self, page=1):
+    def getSID(self):
+        return self.session.cookies["CODMONSESSID"]
+
+    def getHandoutsPage(self, page=1):
         fmt = "https://api-reference-room.codmon.com/v1/handouts/forParents?page=%d"
         headers = {"authorization": self.getSID()}
         url = fmt % page
-        return self.session.get(url, headers=headers)
+        return self.get(url, headers=headers)
 
-    def getSID(self):
-        return self.session.cookies["CODMONSESSID"]
+    def getHandout(self, handoutId):
+        fmt = "https://api-reference-room.codmon.com/v1/handouts/%(handoutId)s/forParents"
+        headers = {"authorization": self.getSID()}
+        url = fmt % {"handoutId": handoutId}
+        return self.get(url, headers=headers)
+
+    def iterHandsoutsPage(self):
+        resj = self.getHandoutsPage().json()
+        for handout in resj["handouts"]:
+            yield handout
+        pages = resj["page"]["totalPages"]
+        for page in range(2, pages + 1):
+            resj = self.getHandoutsPage(page=page).json()
+            for handout in resj["handouts"]:
+                yield handout
+
+    def iterHandouts(self):
+        for item in self.iterHandsoutsPage():
+            hid = item["handoutId"]
+            yield self.getHandout(hid).json()
+
+    def dumpHandouts(self):
+        fdr = p.join(_DATA, "handouts")
+        if not p.isdir(fdr):
+            os.makedirs(fdr)
+        for item in self.iterHandouts():
+            isodt = item["publishFromDateTime"]
+            disp_date = date.fromisoformat(isodt.split("T")[0])
+            itemname = "%(date)s.jspn" % {"date": disp_date}
+            fn = p.join(fdr, itemname)
+            with open(fn, 'w') as f:
+                json.dump(item, f)
 
     def getChildren(self):
         """
@@ -249,8 +282,6 @@ class Dumpmon(object):
                 resj = self.getJson(url)
                 for item in resj["data"]:
                     yield item
-
-
 
     def dumpComments(self):
         srvs = self.services()
