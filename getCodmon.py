@@ -120,7 +120,7 @@ class Dumpmon(object):
         resj = res.json()
         if not resj["success"]:
             raise RuntimeError()
-        return resj["data"]
+        return resj
 
     def services(self):
         u"""
@@ -209,7 +209,7 @@ class Dumpmon(object):
                     continue
                 yield rel
 
-    def getComments(self, service_id):
+    def iterComments(self, service_id, start=None, end=None):
         """
         https://ps-api.codmon.com/api/v2/parent/comments/
             ?search_kind=2
@@ -222,11 +222,13 @@ class Dumpmon(object):
         for cmr in self.iterCMR(service_id):
             o_date = cmr["member_open_date"]
             c_date = cmr["member_close_date"]
-            if c_date:
-                start = date.fromisoformat(c_date)
-            else:
-                start = date.today()
-            end = date.fromisoformat(o_date)
+            if start is None:
+                if c_date:
+                    start = date.fromisoformat(c_date)
+                else:
+                    start = date.today()
+            if end is None:
+                end = date.fromisoformat(o_date)
 
             fmt = (
                 "https://ps-api.codmon.com/api/v2/parent/comments/"
@@ -242,11 +244,72 @@ class Dumpmon(object):
                 mem = cmr["member_id"]
                 url = fmt % {
                     "relation_id": int(mem), 
-                    "date": s_date.isoformat(),
+                    "s_date": s_date.isoformat(),
                 }
-                return self.get(url)
+                resj = self.getJson(url)
+                for item in resj["data"]:
+                    yield item
 
 
+
+    def dumpComments(self):
+        srvs = self.services()
+        for service_id in srvs.keys():
+            cmt_fdr = p.join(_DATA, srvs[service_id]["name"], "comments")
+            if not p.isdir(cmt_fdr):
+                os.makedirs(cmt_fdr)
+            for item in self.iterComments(service_id):
+                itemname = "%(display_date)s_%(id)s.json" % item
+                fn = p.join(cmt_fdr, itemname)
+                with open(fn, 'w') as f:
+                    json.dump(item, f)
+
+    def iterContactResponses(self, service_id, start=None, end=None):
+        for cmr in self.iterCMR(service_id):
+            o_date = cmr["member_open_date"]
+            c_date = cmr["member_close_date"]
+            if start is None:
+                if c_date:
+                    start = date.fromisoformat(c_date)
+                else:
+                    start = date.today()
+            if end is None:
+                end = date.fromisoformat(o_date)
+            print("o: %r, c: %r" % (o_date, c_date))
+            fmt = (
+                "https://ps-api.codmon.com/api/v2/parent/contact_responses/"
+                "?member_id=%(member_id)s"
+                "&search_start_display_date=%(s_date)s"
+                "&search_end_display_date=%(s_date)s"
+                "&search_status_id[]=1"
+                "&search_status_id[]=2"
+                "&search_status_id[]=3"
+                "&perpage=1000"
+                "&__env__=myapp")
+
+            for s_date in drange(start, end):
+                mem = cmr["member_id"]
+                url = fmt % {
+                    "member_id": int(mem), 
+                    "s_date": s_date.isoformat(),
+                }
+                resj = self.getJson(url)
+                for item in resj["data"]:
+                    yield item
+
+    def dumpContactResponses(self, service_id=None):
+        srvs = self.services()
+        for sid in srvs.keys():
+            if service_id and sid != service_id:
+                continue
+            cr_fdr = p.join(_DATA, srvs[sid]["name"], "contact_responses")
+            if not p.isdir(cr_fdr):
+                os.makedirs(cr_fdr)
+            for item in self.iterContactResponses(sid):
+                itemname = "%(display_date)s_%(id)s.json" % item
+                fn = p.join(cr_fdr, itemname)
+                with open(fn, 'w') as f:
+                    json.dump(item, f)
 
 class TimelineItem(object):
     def __init__(self, dumpmon, item):
@@ -408,9 +471,6 @@ def allpage(session, sid, start=1, end=1000):
             print("LastPage Detected. Finish: %d" % i)
             break
 
-def templist():
-    pass
-
 
 def main():
     c = Dumpmon()
@@ -419,6 +479,7 @@ def main():
     except:
         c.login()
         c.saveCookie()
+    c.dumpComments()
     # c.dumpTimeline()
     # allpage(c.session, 1)
 
