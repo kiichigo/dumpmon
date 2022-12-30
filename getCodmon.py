@@ -45,6 +45,7 @@ _DATA = p.expanduser("~/Desktop/dumpmon")
 _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
 
+
 def drange(s, e):
     days = (e-s).days
     return [s + timedelta(x) for x in range(0, days, 1 if days >= 0 else -1)]
@@ -81,7 +82,7 @@ class Dumpmon(object):
         fn = p.join(self.datadir, "config.json")
         with open(fn, "w") as f:
             json.dump(conf, f)
-        assert(p.isfile(fn))
+        assert p.isfile(fn)
 
     # --- Login
 
@@ -110,9 +111,11 @@ class Dumpmon(object):
     # --- 
 
     def get(self, url, headers=None):
+        log.info(url)
         res = self.session.get(url, headers=headers)
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
+        sleep(0.5)
         return res
 
     def getJson(self, url):
@@ -131,7 +134,7 @@ class Dumpmon(object):
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
         resj = res.json()
-        assert(resj["success"])
+        assert resj["success"]
         return resj["data"]
 
     def getTimeline(self, service_id, page):
@@ -182,6 +185,7 @@ class Dumpmon(object):
     def getSID(self):
         return self.session.cookies["CODMONSESSID"]
 
+
     def getHandoutsPage(self, page=1):
         fmt = "https://api-reference-room.codmon.com/v1/handouts/forParents?page=%d"
         headers = {"authorization": self.getSID()}
@@ -209,17 +213,46 @@ class Dumpmon(object):
             hid = item["handoutId"]
             yield self.getHandout(hid).json()
 
-    def dumpHandouts(self):
+    def handoutFolder(self):
         fdr = p.join(_DATA, "handouts")
         if not p.isdir(fdr):
             os.makedirs(fdr)
+        return fdr
+
+    def downloadHandout(self, item):
+        fdr = self.handoutFolder()
+        for i, att in enumerate(item["attachments"]):
+            url = att["url"]
+            itemname = "%(_date)s [%(title)s][%(count)s] %(filename)s" % dict(
+                _date=item["publishFromDateTime"].split("T")[0],
+                count=i,
+                title=item["title"],
+                filename=urllib.parse.unquote(att["fileName"]),
+            )
+            fn = p.join(fdr, itemname)
+            res = self.get(url)
+            with open(fn, 'wb') as f:
+                f.write(res.content)
+
+    def dumpHandouts(self):
+        fdr = self.handoutFolder()
         for item in self.iterHandouts():
             isodt = item["publishFromDateTime"]
             disp_date = date.fromisoformat(isodt.split("T")[0])
-            itemname = "%(date)s.jspn" % {"date": disp_date}
+            itemname = "%(date)s [%(title)s].json" % {"date": disp_date, "title": item["title"]}
             fn = p.join(fdr, itemname)
             with open(fn, 'w') as f:
                 json.dump(item, f)
+    
+    def iterDumpedHandouts(self):
+        fdr = self.handoutFolder()
+        for fn in os.listdir(fdr):
+            with open(p.join(fdr, fn), 'r') as f:
+                yield json.load(f)
+
+    def downloadAllHandout(self):
+        for item in self.iterDumpedHandouts():
+            self.downloadHandout(item)            
 
     def getChildren(self):
         """
@@ -342,6 +375,7 @@ class Dumpmon(object):
                 with open(fn, 'w') as f:
                     json.dump(item, f)
 
+
 class TimelineItem(object):
     def __init__(self, dumpmon, item):
         self.dumpmon = dumpmon
@@ -385,7 +419,6 @@ class TimelineItem(object):
         url = _TOP_URL + self.item["file_url"]
         res = self.dumpmon.get(url)
         sleep(0.5)
-
 
         with open(full, 'wb') as f:
             f.write(res.content)
@@ -510,7 +543,9 @@ def main():
     except:
         c.login()
         c.saveCookie()
-    c.dumpComments()
+    #c.dumpComments()
+    c.dumpHandouts()
+    c.downloadAllHandout()
     # c.dumpTimeline()
     # allpage(c.session, 1)
 
