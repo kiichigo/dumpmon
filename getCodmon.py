@@ -137,6 +137,8 @@ class Dumpmon(object):
         assert resj["success"]
         return resj["data"]
 
+    # --- timeline
+
     def getTimeline(self, service_id, page):
         log.info("timeline: %s %s" % (service_id, page))
         fmt = _API_URL + "/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp" 
@@ -182,9 +184,15 @@ class Dumpmon(object):
             with open(p.join(tl_fdr, fn), "r") as f:
                 yield json.load(f)
 
+    def downloadTimeline(self):
+        for item in self.iterDumpedTimeline():
+            tl = TimelineItem(self, item)
+            tl.download()
+
+    # --- handout
+
     def getSID(self):
         return self.session.cookies["CODMONSESSID"]
-
 
     def getHandoutsPage(self, page=1):
         fmt = "https://api-reference-room.codmon.com/v1/handouts/forParents?page=%d"
@@ -254,6 +262,8 @@ class Dumpmon(object):
         for item in self.iterDumpedHandouts():
             self.downloadHandout(item)            
 
+    # --- children
+
     def getChildren(self):
         """
         https://ps-api.codmon.com/api/v2/parent/children/
@@ -262,6 +272,8 @@ class Dumpmon(object):
         """
         url = "https://ps-api.codmon.com/api/v2/parent/children/"
         return self.getJson(url)
+
+    # -- comments
 
     def iterCMR(self, service_id=None):
         u"""
@@ -327,6 +339,8 @@ class Dumpmon(object):
                 fn = p.join(cmt_fdr, itemname)
                 with open(fn, 'w') as f:
                     json.dump(item, f)
+
+    # --- contact_responses
 
     def iterContactResponses(self, service_id, start=None, end=None):
         for cmr in self.iterCMR(service_id):
