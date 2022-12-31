@@ -17,8 +17,8 @@ import urllib
 
 log = logging.getLogger()
 
-def get_datadir() -> pathlib.Path:
 
+def get_appdatadir() -> pathlib.Path:
     """
     Returns a parent directory path
     where persistent application data can be stored.
@@ -41,6 +41,8 @@ def get_datadir() -> pathlib.Path:
 _THISDIR = p.dirname(__file__)
 
 _DATA = p.expanduser("~/Desktop/dumpmon")
+_DUMPDIR = p.join(_DATA, "dump")
+_OUTPUTDIR = p.join(_DATA, "output")
 
 _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
@@ -55,12 +57,11 @@ class Dumpmon(object):
 
     def __init__(self):
         self.session = requests.Session()
-        self.res = []
         # create program's directory
-        self.datadir = get_datadir() / "dumpmon"
-
+        self.appdatadir = get_appdatadir() / "dumpmon"
+        self.cookiefile = p.join(self.appdatadir, "cookie.dat")
         try:
-            self.datadir.mkdir(parents=True)
+            self.appdatadir.mkdir(parents=True)
         except FileExistsError:
             pass
 
@@ -70,7 +71,7 @@ class Dumpmon(object):
     # --- Config
 
     def loadConf(self):
-        fn = p.join(self.datadir, "config.json")
+        fn = p.join(self.appdatadir, "config.json")
         if p.isfile(fn):
             with open(fn, "r") as f:
                 conf = json.load(f)
@@ -79,16 +80,25 @@ class Dumpmon(object):
         return conf
 
     def saveConf(self, conf):
-        fn = p.join(self.datadir, "config.json")
+        fn = p.join(self.appdatadir, "config.json")
         with open(fn, "w") as f:
             json.dump(conf, f)
         assert p.isfile(fn)
 
     # --- Login
 
-    def login(self):
+    def testLogin(self):
+        self.loadCookie()
+        # test
+        res = self.session.get(_API_URL + "/parents")
+        log.debug("res: %r" % res)
+        return res.status_code == 200
+
+    def login(self, useSavedId=True):
+        if self.testLogin():
+            return
         conf = self.loadConf()
-        if "id" in conf:
+        if useSavedId and "id" in conf:
             id = conf["id"]
         else:
             id = input("login: ")
@@ -96,21 +106,24 @@ class Dumpmon(object):
             self.saveConf(conf)
         pw = getpass.getpass("password: ")
         loginPayload = {"login_id": id, "login_password": pw}
-        r = self.session.post(_API_URL + "/login?__env__=myapp", data=loginPayload)
-        self.res.append(r)
-        return r
+        res = self.session.post(_API_URL + "/login?__env__=myapp", data=loginPayload)
+        if res.status_code == 200:
+            self.saveCookie()
+        return res
 
     def saveCookie(self):
-        with open(p.join(self.datadir, "cookie.dat"), 'wb') as f:
+        with open(self.cookiefile, 'wb') as f:
             pickle.dump(self.session.cookies, f)
 
     def loadCookie(self):
-        with open(p.join(self.datadir, "cookie.dat"), 'rb') as f:
-            self.session.cookies.update(pickle.load(f))
+        if p.isfile(self.cookiefile):
+            with open(p.join(self.appdatadir, "cookie.dat"), 'rb') as f:
+                self.session.cookies.update(pickle.load(f))
 
-    # --- 
+    # ---
 
     def get(self, url, headers=None):
+        u""" HTTP GET for Codmon session"""
         log.info(url)
         res = self.session.get(url, headers=headers)
         if res.status_code != 200:
@@ -158,7 +171,7 @@ class Dumpmon(object):
     def dumpTimeline(self):
         srvs = self.services()
         for service_id in srvs.keys():
-            tl_fdr = p.join(_DATA, srvs[service_id]["name"], "timeline")
+            tl_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "timeline")
             if not p.isdir(tl_fdr):
                 os.makedirs(tl_fdr)
             for item in self.iterTimeLineItems(service_id):
@@ -174,20 +187,20 @@ class Dumpmon(object):
                     print(item)
                     raise RuntimeError("unknown timeline_kind: %s" %  item["timeline_kind"])
                 fn = p.join(tl_fdr, itemname)
-                with open(fn, 'w') as f:
-                    json.dump(item, f)
+                self.dumpjson(fn, item)
 
     def iterDumpedTimeline(self, service_id):
         srvs = self.services()
-        tl_fdr = p.join(_DATA, srvs[service_id]["name"], "timeline")
+        tl_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "timeline")
         for fn in os.listdir(tl_fdr):
             with open(p.join(tl_fdr, fn), "r") as f:
                 yield json.load(f)
 
     def downloadTimeline(self):
-        for item in self.iterDumpedTimeline():
-            tl = TimelineItem(self, item)
-            tl.download()
+        for sid in self.services().keys():
+            for item in self.iterDumpedTimeline(sid):
+                tl = TimelineItem(self, item)
+                tl.download()
 
     # --- handout
 
@@ -221,14 +234,29 @@ class Dumpmon(object):
             hid = item["handoutId"]
             yield self.getHandout(hid).json()
 
-    def handoutFolder(self):
-        fdr = p.join(_DATA, "handouts")
+    def handoutDumpFolder(self):
+        fdr = p.join(_DUMPDIR, "handouts")
         if not p.isdir(fdr):
             os.makedirs(fdr)
         return fdr
 
+    def dumpHandouts(self):
+        fdr = self.handoutDumpFolder()
+        for item in self.iterHandouts():
+            isodt = item["publishFromDateTime"]
+            disp_date = date.fromisoformat(isodt.split("T")[0])
+            itemname = "%(date)s [%(title)s].json" % {"date": disp_date, "title": item["title"]}
+            fn = p.join(fdr, itemname)
+            self.dumpjson(fn, item)
+
+    def iterDumpedHandouts(self):
+        fdr = self.handoutDumpFolder()
+        for fn in os.listdir(fdr):
+            with open(p.join(fdr, fn), 'r') as f:
+                yield json.load(f)
+
     def downloadHandout(self, item):
-        fdr = self.handoutFolder()
+        fdr = self.handoutDumpFolder()
         for i, att in enumerate(item["attachments"]):
             url = att["url"]
             itemname = "%(_date)s [%(title)s][%(count)s] %(filename)s" % dict(
@@ -241,22 +269,6 @@ class Dumpmon(object):
             res = self.get(url)
             with open(fn, 'wb') as f:
                 f.write(res.content)
-
-    def dumpHandouts(self):
-        fdr = self.handoutFolder()
-        for item in self.iterHandouts():
-            isodt = item["publishFromDateTime"]
-            disp_date = date.fromisoformat(isodt.split("T")[0])
-            itemname = "%(date)s [%(title)s].json" % {"date": disp_date, "title": item["title"]}
-            fn = p.join(fdr, itemname)
-            with open(fn, 'w') as f:
-                json.dump(item, f)
-    
-    def iterDumpedHandouts(self):
-        fdr = self.handoutFolder()
-        for fn in os.listdir(fdr):
-            with open(p.join(fdr, fn), 'r') as f:
-                yield json.load(f)
 
     def downloadAllHandout(self):
         for item in self.iterDumpedHandouts():
@@ -331,14 +343,13 @@ class Dumpmon(object):
     def dumpComments(self):
         srvs = self.services()
         for service_id in srvs.keys():
-            cmt_fdr = p.join(_DATA, srvs[service_id]["name"], "comments")
+            cmt_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "comments")
             if not p.isdir(cmt_fdr):
                 os.makedirs(cmt_fdr)
             for item in self.iterComments(service_id):
                 itemname = "%(display_date)s_%(id)s.json" % item
                 fn = p.join(cmt_fdr, itemname)
-                with open(fn, 'w') as f:
-                    json.dump(item, f)
+                self.dumpjson(fn, item)
 
     # --- contact_responses
 
@@ -380,14 +391,17 @@ class Dumpmon(object):
         for sid in srvs.keys():
             if service_id and sid != service_id:
                 continue
-            cr_fdr = p.join(_DATA, srvs[sid]["name"], "contact_responses")
+            cr_fdr = p.join(_DUMPDIR, srvs[sid]["name"], "contact_responses")
             if not p.isdir(cr_fdr):
                 os.makedirs(cr_fdr)
             for item in self.iterContactResponses(sid):
                 itemname = "%(display_date)s_%(id)s.json" % item
                 fn = p.join(cr_fdr, itemname)
-                with open(fn, 'w') as f:
-                    json.dump(item, f)
+                self.dumpjson(fn, item)
+
+    def dumpjson(self, fn, item):
+        with open(fn, 'w', encoding="utf-8") as f:
+            json.dump(item, f, ensure_ascii=False, indent=4)
 
 
 class TimelineItem(object):
@@ -395,27 +409,33 @@ class TimelineItem(object):
         self.dumpmon = dumpmon
         self.item = item
 
-    def getOutputPath(self, *lst):
+    def getOutputPath(self):
         display_date = self.item["display_date"]
         title = self.item.get("title", "")
 
         if re.search(r"ねこ|幼児", title):
-            outfolder = p.join(_DATA, "etc")
+            outfolder = p.join(_OUTPUTDIR, "etc")
         else:
             m = re.match(r'(\d{4}-\d{2})-\d{2}', display_date)
             if not m:
                 raise RuntimeError("invalid display_date: %r" % display_date)
             yyyy_dd = m.group(1)
-            outfolder = p.join(_DATA, yyyy_dd)
+            outfolder = p.join(_OUTPUTDIR, yyyy_dd)
         if not p.isdir(outfolder):
             os.makedirs(outfolder)
-        return p.join(outfolder, *lst)
+        return outfolder
 
     def download(self):
         if "file_url" not in self.item:
             return
         if self.item["file_url"] is None:
             return
+
+        #if p.isfile(full):
+        #    log.info("aleady exists. skip download: %s" % fn)
+
+        url = _TOP_URL + self.item["file_url"]
+        res = self.dumpmon.get(url)
 
         try:
             cd = res.headers['Content-Disposition']
@@ -424,16 +444,8 @@ class TimelineItem(object):
             print(self.item)
             raise
         
-        fn = ( "%(display_date)s [%(title)s]" % self.item ) + name
-        full = self.getOutputPath(self.item, fn)
-
-        if p.isfile(full):
-            log.info("aleady exists. skip download: %s" % fn)
-
-        url = _TOP_URL + self.item["file_url"]
-        res = self.dumpmon.get(url)
-        sleep(0.5)
-
+        fn = ("%(display_date)s [%(title)s]" % self.item) + name
+        full = p.join(self.getOutputPath(), fn)
         with open(full, 'wb') as f:
             f.write(res.content)
 
@@ -526,42 +538,45 @@ def procPage(session, data):
         procItem(session, item)
 
 
-def allpage(session, sid, start=1, end=1000):
-    fmt = "/api/v2/parent/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp"
-    for i in range(start, end):
-        sleep(1)
-        url = _TOP_URL + (fmt % (i, sid))
-        print(url)
-        r = session.get(url)
-        if r.status_code != 200:
-            raise RuntimeError("%r" % r)
-        rj = r.json()
-
-        rj["success"]
-        rj["data"]
-        if rj["error"]:
-            raise RuntimeError("Error: %r" % r)
-
-        for item in rj["data"]:
-            procItem(session, item)
-
-        if not rj["next_page"]:
-            print("LastPage Detected. Finish: %d" % i)
-            break
+#def allpage(session, sid, start=1, end=1000):
+#    fmt = "/api/v2/parent/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp"
+#    for i in range(start, end):
+#        sleep(1)
+#        url = _TOP_URL + (fmt % (i, sid))
+#        print(url)
+#        r = session.get(url)
+#        if r.status_code != 200:
+#            raise RuntimeError("%r" % r)
+#        rj = r.json()
+#
+#        rj["success"]
+#        rj["data"]
+#        if rj["error"]:
+#            raise RuntimeError("Error: %r" % r)
+#
+#        for item in rj["data"]:
+#            procItem(session, item)
+#
+#        if not rj["next_page"]:
+#            print("LastPage Detected. Finish: %d" % i)
+#            break
 
 
 def main():
+    logging.basicConfig(level=logging.DEBUG)
+    log.debug("debug")
     c = Dumpmon()
-    try:
-        c.loadCookie()
-    except:
+    if not c.testLogin():
         c.login()
-        c.saveCookie()
-    #c.dumpComments()
+        while(not c.testLogin()):
+            c.login(useSavedId=False)
+    
+    c.dumpTimeline()
+    c.dumpComments()
+    c.dumpContactResponses()
     c.dumpHandouts()
-    c.downloadAllHandout()
-    # c.dumpTimeline()
-    # allpage(c.session, 1)
+    # c.downloadTimeline()
+    # c.downloadAllHandout()
 
 if __name__ == "__main__":
     main()
