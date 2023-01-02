@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import argparse
 from datetime import date, timedelta 
 import getpass
 import json
@@ -48,14 +49,19 @@ _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
 
 
-def drange(s, e):
+def drange(s, e, includeEndDate=False):
     days = (e-s).days
-    return [s + timedelta(x) for x in range(0, days, 1 if days >= 0 else -1)]
+    step = 1 if days >= 0 else -1
+    if includeEndDate:
+        days += step 
+    return [s + timedelta(x) for x in range(0, days, step)]
 
 
 class Dumpmon(object):
 
-    def __init__(self):
+    def __init__(self, start_date=None, end_date=None):
+        self.s_date = start_date
+        self.e_date = end_date
         self.session = requests.Session()
         # create program's directory
         self.appdatadir = get_appdatadir() / "dumpmon"
@@ -150,6 +156,35 @@ class Dumpmon(object):
         assert resj["success"]
         return resj["data"]
 
+    def dateRangeTest(self, item):
+        u"""
+        日付範囲より過去なら-1
+        未来なら1
+        範囲内なら0
+        """
+        if self.s_date is None:
+            return True
+        if self.e_date is None:
+            return True
+        if "display_date" in item:
+            item_date = date.fromisoformat(item["display_date"])
+        elif "insert_datetime" in item:  # "2022-04-01 15:42:09",
+            item_date = date.fromisoformat(item["insert_datetime"].split(" ")[0])
+        elif "start_date" in item:
+            item_date = date.fromisoformat(item["start_date"])
+        elif "publishFromDateTime" in item:  # "2022-04-01T10:40:44Z",
+            item_date = date.fromisoformat(item["publishFromDateTime"].split("T")[0])
+
+        else:
+            raise RuntimeError('Unknown date key: %r' % item)
+        a, b = sorted([self.s_date, self.e_date])
+        if item_date < a:
+            return -1
+        elif item_date > b:
+            return 1
+        else:
+            return 0
+
     # --- timeline
 
     def getTimeline(self, service_id, page):
@@ -163,7 +198,13 @@ class Dumpmon(object):
             sleep(0.5)
             resj = self.getTimeline(service_id, i)
             for item in resj["data"]:
-                yield item
+                result = self.dateRangeTest(item)
+                if result == 1:
+                    pass
+                elif result == 0:
+                    yield item
+                elif result == -1:
+                    return
             if not resj["next_page"]:
                 print("LastPage Detected. Finish: %d" % i)
                 return
@@ -185,7 +226,7 @@ class Dumpmon(object):
                     itemname = "%(start_date)s_%(id)s.json" % item
                 else:
                     print(item)
-                    raise RuntimeError("unknown timeline_kind: %s" %  item["timeline_kind"])
+                    raise RuntimeError("unknown timeline_kind: %s" % item["timeline_kind"])
                 fn = p.join(tl_fdr, itemname)
                 self.dumpjson(fn, item)
 
@@ -208,18 +249,21 @@ class Dumpmon(object):
         return self.session.cookies["CODMONSESSID"]
 
     def getHandoutsPage(self, page=1):
+        u""" 資料室のリスト画面相当のデータを取得 """
         fmt = "https://api-reference-room.codmon.com/v1/handouts/forParents?page=%d"
         headers = {"authorization": self.getSID()}
         url = fmt % page
         return self.get(url, headers=headers)
 
     def getHandout(self, handoutId):
+        u""" 各資料データを取得 """
         fmt = "https://api-reference-room.codmon.com/v1/handouts/%(handoutId)s/forParents"
         headers = {"authorization": self.getSID()}
         url = fmt % {"handoutId": handoutId}
         return self.get(url, headers=headers)
 
     def iterHandsoutsPage(self):
+        u""" 資料室のリスト画面をページ事に取得していくイテレータ """
         resj = self.getHandoutsPage().json()
         for handout in resj["handouts"]:
             yield handout
@@ -232,7 +276,13 @@ class Dumpmon(object):
     def iterHandouts(self):
         for item in self.iterHandsoutsPage():
             hid = item["handoutId"]
-            yield self.getHandout(hid).json()
+            result = self.dateRangeTest(item)
+            if result == 1:
+                pass
+            elif result == 0:
+                yield self.getHandout(hid).json()
+            elif result == -1:
+                return
 
     def handoutDumpFolder(self):
         fdr = p.join(_DUMPDIR, "handouts")
@@ -299,7 +349,7 @@ class Dumpmon(object):
                     continue
                 yield rel
 
-    def iterComments(self, service_id, start=None, end=None):
+    def iterComments(self, service_id):
         """
         https://ps-api.codmon.com/api/v2/parent/comments/
             ?search_kind=2
@@ -312,6 +362,8 @@ class Dumpmon(object):
         for cmr in self.iterCMR(service_id):
             o_date = cmr["member_open_date"]
             c_date = cmr["member_close_date"]
+            start = self.s_date
+            end = self.e_date
             if start is None:
                 if c_date:
                     start = date.fromisoformat(c_date)
@@ -338,7 +390,13 @@ class Dumpmon(object):
                 }
                 resj = self.getJson(url)
                 for item in resj["data"]:
-                    yield item
+                    result = self.dateRangeTest(item)
+                    if result == 1:
+                        pass
+                    elif result == 0:
+                        yield item
+                    elif result == -1:
+                        return
 
     def dumpComments(self):
         srvs = self.services()
@@ -353,10 +411,12 @@ class Dumpmon(object):
 
     # --- contact_responses
 
-    def iterContactResponses(self, service_id, start=None, end=None):
+    def iterContactResponses(self, service_id):
         for cmr in self.iterCMR(service_id):
             o_date = cmr["member_open_date"]
             c_date = cmr["member_close_date"]
+            start = self.s_date
+            end = self.e_date
             if start is None:
                 if c_date:
                     start = date.fromisoformat(c_date)
@@ -384,7 +444,13 @@ class Dumpmon(object):
                 }
                 resj = self.getJson(url)
                 for item in resj["data"]:
-                    yield item
+                    result = self.dateRangeTest(item)
+                    if result == 1:
+                        pass
+                    elif result == 0:
+                        yield item
+                    elif result == -1:
+                        return
 
     def dumpContactResponses(self, service_id=None):
         srvs = self.services()
@@ -431,7 +497,7 @@ class TimelineItem(object):
         if self.item["file_url"] is None:
             return
 
-        #if p.isfile(full):
+        # if p.isfile(full):
         #    log.info("aleady exists. skip download: %s" % fn)
 
         url = _TOP_URL + self.item["file_url"]
@@ -501,74 +567,79 @@ def procRenraku(item):
         f.write(text)
 
 
-def procItem(session, item):
-    keys = ['display_date', 'id', 'kind', 'service_id', 'timeline_kind']
-    fn = "%s.txt" % item["id"]
+# def procItem(session, item):
+#     keys = ['display_date', 'id', 'kind', 'service_id', 'timeline_kind']
+#     fn = "%s.txt" % item["id"]
 
-    if item["kind"] == "4":
-        procRenraku(item)
+#     if item["kind"] == "4":
+#         procRenraku(item)
 
-    if p.isfile(p.join(_DATA, "id", fn)):
-        return
+#     if p.isfile(p.join(_DATA, "id", fn)):
+#         return
 
-    if item["kind"] == "1":  # お知らせ
-        download(session, item)
-    elif item["kind"] == "4":  # 連絡帳
-        procRenraku(item)
-    elif item["kind"] in ["6"]:  # アンケート
-        print("skip; %s" % item["id"])
-        print([item[x] for x in keys])
-        return
-    elif item["kind"] in ["3", "7"]:
-        pass
-    elif item["kind"] == "8": # 遅刻・欠席連絡
-        pass
-    elif item["kind"] in ["9"]:  # 都合欠
-        pass 
-    else:
-        raise RuntimeError("unknown kind: %r" % item)
+#     if item["kind"] == "1":  # お知らせ
+#         download(session, item)
+#     elif item["kind"] == "4":  # 連絡帳
+#         procRenraku(item)
+#     elif item["kind"] in ["6"]:  # アンケート
+#         print("skip; %s" % item["id"])
+#         print([item[x] for x in keys])
+#         return
+#     elif item["kind"] in ["3", "7"]:
+#         pass
+#     elif item["kind"] == "8": # 遅刻・欠席連絡
+#         pass
+#     elif item["kind"] in ["9"]:  # 都合欠
+#         pass 
+#     else:
+#         raise RuntimeError("unknown kind: %r" % item)
 
-    with open(p.join(_ID_DIR, fn), 'w') as f:
-        json.dump(item, f)
-
-
-def procPage(session, data):
-    for i, item in enumerate(data):
-        print("[%d]" % i)
-        procItem(session, item)
+#     with open(p.join(_ID_DIR, fn), 'w') as f:
+#         json.dump(item, f)
 
 
-#def allpage(session, sid, start=1, end=1000):
-#    fmt = "/api/v2/parent/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp"
-#    for i in range(start, end):
-#        sleep(1)
-#        url = _TOP_URL + (fmt % (i, sid))
-#        print(url)
-#        r = session.get(url)
-#        if r.status_code != 200:
-#            raise RuntimeError("%r" % r)
-#        rj = r.json()
-#
-#        rj["success"]
-#        rj["data"]
-#        if rj["error"]:
-#            raise RuntimeError("Error: %r" % r)
-#
-#        for item in rj["data"]:
-#            procItem(session, item)
-#
-#        if not rj["next_page"]:
-#            print("LastPage Detected. Finish: %d" % i)
-#            break
+# def procPage(session, data):
+#     for i, item in enumerate(data):
+#         print("[%d]" % i)
+#         procItem(session, item)
 
 
 def main():
-    logging.basicConfig(level=logging.DEBUG)
+    """
+    all none noneS
+    -day 5 doday, today-5
+
+    """
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "-a", "--all")
+    group.add_argument(
+        "-d", "--day", type=int)
+    group.add_argument(
+        "-r", "--range", type=date.fromisoformat,
+        nargs=2, metavar=("YYYY-MM-DD", "YYYY-MM-DD"))
+
+    parser.add_argument("-v", "--verbosity", help="increase output verbosity", action="store_true")
+    args = parser.parse_args()
+    if args.verbosity:
+        print("verbosity turned on")
+        logging.basicConfig(level=logging.DEBUG)
+    if args.day:
+        s_date = date.today()
+        e_date = s_date - timedelta(args.day)
+    elif args.range:
+        s_date = args.range[0]
+        e_date = args.range[1]
+    else:
+        s_date = None
+        e_date = None
+
     log.debug("debug")
-    c = Dumpmon()
+    c = Dumpmon(start_date=s_date, end_date=e_date)
     if not c.testLogin():
         c.login()
-        while(not c.testLogin()):
+        while (not c.testLogin()):
             c.login(useSavedId=False)
     
     c.dumpTimeline()
@@ -577,6 +648,7 @@ def main():
     c.dumpHandouts()
     # c.downloadTimeline()
     # c.downloadAllHandout()
+
 
 if __name__ == "__main__":
     main()
