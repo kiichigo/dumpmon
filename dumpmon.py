@@ -1,7 +1,12 @@
 #!/usr/bin/python3
 
+u"""
+これはCodmonの連絡帳のやり取りや添付ファイル、出欠連絡や資料室のファイルなどを一括ダウンロードするスクリプトです。
+
+"""
+
 import argparse
-from datetime import date, timedelta 
+from datetime import date, datetime, timedelta
 import getpass
 import json
 import logging
@@ -50,10 +55,10 @@ _API_URL = _TOP_URL + "/api/v2/parent"
 
 
 def drange(s, e, includeEndDate=False):
-    days = (e-s).days
+    days = (e - s).days
     step = 1 if days >= 0 else -1
     if includeEndDate:
-        days += step 
+        days += step
     return [s + timedelta(x) for x in range(0, days, step)]
 
 
@@ -66,6 +71,7 @@ class Dumpmon(object):
         # create program's directory
         self.appdatadir = get_appdatadir() / "dumpmon"
         self.cookiefile = p.join(self.appdatadir, "cookie.dat")
+        self.services_cache = None
         try:
             self.appdatadir.mkdir(parents=True)
         except FileExistsError:
@@ -79,8 +85,7 @@ class Dumpmon(object):
     def loadConf(self):
         fn = p.join(self.appdatadir, "config.json")
         if p.isfile(fn):
-            with open(fn, "r") as f:
-                conf = json.load(f)
+            conf = self.loadjson(fn)
         else:
             conf = {}
         return conf
@@ -126,7 +131,7 @@ class Dumpmon(object):
             with open(p.join(self.appdatadir, "cookie.dat"), 'rb') as f:
                 self.session.cookies.update(pickle.load(f))
 
-    # ---
+    # --- session.get util
 
     def get(self, url, headers=None):
         u""" HTTP GET for Codmon session"""
@@ -144,17 +149,34 @@ class Dumpmon(object):
             raise RuntimeError()
         return resj
 
-    def services(self):
+    # --- json file handle
+
+    def dumpjson(self, fn, item):
+        with open(fn, 'w', encoding="utf-8") as f:
+            json.dump(item, f, ensure_ascii=False, indent=4)
+
+    def loadjson(self, fn):
+        with open(fn, 'r', encoding="utf-8") as f:
+            return json.load(f)
+
+    # --- fetch services list
+
+    def getServices(self):
         u"""
         https://ps-api.codmon.com/api/v2/parent/services/?use_image_edge=true&__env__=myapp
         """
+        if self.services_cache is not None:
+            return self.services_cache
         url = _API_URL + "/services"
         res = self.session.get(url)
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
         resj = res.json()
         assert resj["success"]
+        self.services_cache = resj["data"]
         return resj["data"]
+
+    # --- filter util date range
 
     def dateRangeTest(self, item):
         u"""
@@ -163,9 +185,9 @@ class Dumpmon(object):
         範囲内なら0
         """
         if self.s_date is None:
-            return True
+            return 0
         if self.e_date is None:
-            return True
+            return 0
         if "display_date" in item:
             item_date = date.fromisoformat(item["display_date"])
         elif "insert_datetime" in item:  # "2022-04-01 15:42:09",
@@ -174,7 +196,6 @@ class Dumpmon(object):
             item_date = date.fromisoformat(item["start_date"])
         elif "publishFromDateTime" in item:  # "2022-04-01T10:40:44Z",
             item_date = date.fromisoformat(item["publishFromDateTime"].split("T")[0])
-
         else:
             raise RuntimeError('Unknown date key: %r' % item)
         a, b = sorted([self.s_date, self.e_date])
@@ -185,11 +206,20 @@ class Dumpmon(object):
         else:
             return 0
 
+    def itemDateTime(self, item):
+        if "insert_datetime" in item:
+            item_dt = datetime.fromisoformat(item["insert_datetime"])
+        elif "update_datetime" in item:
+            item_dt = datetime.fromisoformat(item["update_datetime"])
+        else:
+            raise RuntimeError('Unknown date key: %r' % item)
+        return item_dt
+
     # --- timeline
 
     def getTimeline(self, service_id, page):
         log.info("timeline: %s %s" % (service_id, page))
-        fmt = _API_URL + "/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp" 
+        fmt = _API_URL + "/timeline/?listpage=%d&search_type[]=new_all&service_id=%d&current_flag=0&use_image_edge=true&__env__=myapp"
         url = fmt % (int(page), int(service_id))
         return self.getJson(url)
 
@@ -208,9 +238,9 @@ class Dumpmon(object):
             if not resj["next_page"]:
                 print("LastPage Detected. Finish: %d" % i)
                 return
-    
+
     def dumpTimeline(self):
-        srvs = self.services()
+        srvs = self.getServices()
         for service_id in srvs.keys():
             tl_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "timeline")
             if not p.isdir(tl_fdr):
@@ -230,18 +260,21 @@ class Dumpmon(object):
                 fn = p.join(tl_fdr, itemname)
                 self.dumpjson(fn, item)
 
-    def iterDumpedTimeline(self, service_id):
-        srvs = self.services()
-        tl_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "timeline")
-        for fn in os.listdir(tl_fdr):
-            with open(p.join(tl_fdr, fn), "r") as f:
-                yield json.load(f)
+    def iterDumpedTimeline(self, service_id=None):
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            if service_id and sid != service_id:
+                continue
+            tl_fdr = p.join(_DUMPDIR, srvs[sid]["name"], "timeline")
+            for fn in os.listdir(tl_fdr):
+                item = self.loadjson(p.join(tl_fdr, fn))
+                if self.dateRangeTest(item) == 0:
+                    yield item
 
     def downloadTimeline(self):
-        for sid in self.services().keys():
-            for item in self.iterDumpedTimeline(sid):
-                tl = TimelineItem(self, item)
-                tl.download()
+        for item in self.iterDumpedTimeline():
+            tl = TimelineItem(self, item)
+            tl.download()
 
     # --- handout
 
@@ -300,13 +333,17 @@ class Dumpmon(object):
             self.dumpjson(fn, item)
 
     def iterDumpedHandouts(self):
+        u""" start date, end dateの範囲内のダンプ済みhandoutを返す 順不同"""
         fdr = self.handoutDumpFolder()
         for fn in os.listdir(fdr):
-            with open(p.join(fdr, fn), 'r') as f:
-                yield json.load(f)
+            item = self.loadjson(p.join(fdr, fn))
+            if self.dateRangeTest(item) == 0:
+                yield item
 
     def downloadHandout(self, item):
-        fdr = self.handoutDumpFolder()
+        fdr = p.join(_OUTPUTDIR, "handouts")
+        if not p.isdir(fdr):
+            os.makedirs(fdr)
         for i, att in enumerate(item["attachments"]):
             url = att["url"]
             itemname = "%(_date)s [%(title)s][%(count)s] %(filename)s" % dict(
@@ -321,8 +358,10 @@ class Dumpmon(object):
                 f.write(res.content)
 
     def downloadAllHandout(self):
+        u""" start date, end dateの範囲内のhandoutをダウンロードする """
+
         for item in self.iterDumpedHandouts():
-            self.downloadHandout(item)            
+            self.downloadHandout(item)
 
     # --- children
 
@@ -385,7 +424,7 @@ class Dumpmon(object):
             for s_date in drange(start, end):
                 mem = cmr["member_id"]
                 url = fmt % {
-                    "relation_id": int(mem), 
+                    "relation_id": int(mem),
                     "s_date": s_date.isoformat(),
                 }
                 resj = self.getJson(url)
@@ -399,7 +438,7 @@ class Dumpmon(object):
                         return
 
     def dumpComments(self):
-        srvs = self.services()
+        srvs = self.getServices()
         for service_id in srvs.keys():
             cmt_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "comments")
             if not p.isdir(cmt_fdr):
@@ -408,6 +447,17 @@ class Dumpmon(object):
                 itemname = "%(display_date)s_%(id)s.json" % item
                 fn = p.join(cmt_fdr, itemname)
                 self.dumpjson(fn, item)
+
+    def iterDumpedComments(self, service_id=None):
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            if service_id and sid != service_id:
+                continue
+            fdr = p.join(_DUMPDIR, srvs[sid]["name"], "comments")
+            for fn in os.listdir(fdr):
+                item = self.loadjson(p.join(fdr, fn))
+                if self.dateRangeTest(item) == 0:
+                    yield item
 
     # --- contact_responses
 
@@ -439,7 +489,7 @@ class Dumpmon(object):
             for s_date in drange(start, end):
                 mem = cmr["member_id"]
                 url = fmt % {
-                    "member_id": int(mem), 
+                    "member_id": int(mem),
                     "s_date": s_date.isoformat(),
                 }
                 resj = self.getJson(url)
@@ -453,22 +503,42 @@ class Dumpmon(object):
                         return
 
     def dumpContactResponses(self, service_id=None):
-        srvs = self.services()
+        srvs = self.getServices()
         for sid in srvs.keys():
             if service_id and sid != service_id:
                 continue
-            cr_fdr = p.join(_DUMPDIR, srvs[sid]["name"], "contact_responses")
-            if not p.isdir(cr_fdr):
-                os.makedirs(cr_fdr)
+            fdr = p.join(_DUMPDIR, srvs[sid]["name"], "contact_responses")
+            if not p.isdir(fdr):
+                os.makedirs(fdr)
             for item in self.iterContactResponses(sid):
                 itemname = "%(display_date)s_%(id)s.json" % item
-                fn = p.join(cr_fdr, itemname)
+                fn = p.join(fdr, itemname)
                 self.dumpjson(fn, item)
 
-    def dumpjson(self, fn, item):
-        with open(fn, 'w', encoding="utf-8") as f:
-            json.dump(item, f, ensure_ascii=False, indent=4)
+    def iterDumpedContactResponses(self, service_id=None):
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            if service_id and sid != service_id:
+                continue
+            fdr = p.join(_DUMPDIR, srvs[sid]["name"], "contact_responses")
+            for fn in os.listdir(fdr):
+                item = self.loadjson(p.join(fdr, fn))
+                if self.dateRangeTest(item) == 0:
+                    yield item
 
+    # --- communication notebook
+
+    def makenote(self):
+        items = []
+        items += self.iterDumpedTimeline()
+        log.debug("numItems: %d" % len(items))
+        items += self.iterDumpedComments()
+        log.debug("numItems: %d" % len(items))
+        items += self.iterDumpedContactResponses()
+        log.debug("numItems: %d" % len(items))
+        items = sorted(items, key=self.itemDateTime)
+        for item in items:
+            log.debug("dt: %r" % self.itemDateTime(item))
 
 class TimelineItem(object):
     def __init__(self, dumpmon, item):
@@ -509,7 +579,7 @@ class TimelineItem(object):
         except Exception:
             print(self.item)
             raise
-        
+
         fn = ("%(display_date)s [%(title)s]" % self.item) + name
         full = p.join(self.getOutputPath(), fn)
         with open(full, 'wb') as f:
@@ -559,12 +629,12 @@ def renrakuToText(item):
     return text
 
 
-def procRenraku(item):
-    text = renrakuToText(item)
-    fn = "%(display_date)s [連絡帳].txt" % item
-    print(fn)
-    with open(getOutputPath(item, fn), "w", encoding="utf-8") as f:
-        f.write(text)
+# def procRenraku(item):
+#     text = renrakuToText(item)
+#     fn = "%(display_date)s [連絡帳].txt" % item
+#     print(fn)
+#     with open(getOutputPath(item, fn), "w", encoding="utf-8") as f:
+#         f.write(text)
 
 
 # def procItem(session, item):
@@ -590,7 +660,7 @@ def procRenraku(item):
 #     elif item["kind"] == "8": # 遅刻・欠席連絡
 #         pass
 #     elif item["kind"] in ["9"]:  # 都合欠
-#         pass 
+#         pass
 #     else:
 #         raise RuntimeError("unknown kind: %r" % item)
 
@@ -606,21 +676,26 @@ def procRenraku(item):
 
 def main():
     """
-    all none noneS
-    -day 5 doday, today-5
-
+    --all none none
+    --day 5 doday, today-5
+    --range
     """
     parser = argparse.ArgumentParser()
+
+    parser.add_argument("-f", "--fetch", help="fetch json", action="store_true")
+    parser.add_argument("-dl", "--download", help="download attachment file", action="store_true")
+    parser.add_argument("-m", "--makenote", help="make communication notebook", action="store_true")
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
-        "-a", "--all")
+        "-a", "--all", action="store_true")
     group.add_argument(
         "-d", "--day", type=int)
     group.add_argument(
         "-r", "--range", type=date.fromisoformat,
         nargs=2, metavar=("YYYY-MM-DD", "YYYY-MM-DD"))
-
     parser.add_argument("-v", "--verbosity", help="increase output verbosity", action="store_true")
+
     args = parser.parse_args()
     if args.verbosity:
         print("verbosity turned on")
@@ -631,9 +706,12 @@ def main():
     elif args.range:
         s_date = args.range[0]
         e_date = args.range[1]
-    else:
+    elif args.all:
         s_date = None
         e_date = None
+    else:
+        s_date = date.today()
+        e_date = s_date - timedelta(7)
 
     log.debug("debug")
     c = Dumpmon(start_date=s_date, end_date=e_date)
@@ -641,13 +719,22 @@ def main():
         c.login()
         while (not c.testLogin()):
             c.login(useSavedId=False)
-    
-    c.dumpTimeline()
-    c.dumpComments()
-    c.dumpContactResponses()
-    c.dumpHandouts()
-    # c.downloadTimeline()
-    # c.downloadAllHandout()
+
+    # dump json
+    if args.fetch:
+        c.dumpTimeline()
+        c.dumpComments()
+        c.dumpContactResponses()
+        c.dumpHandouts()
+
+    # download attach file
+    if args.download:
+        c.downloadTimeline()
+        c.downloadAllHandout()
+
+    # meke communication notebook
+    if args.makenote:
+        c.makenote()
 
 
 if __name__ == "__main__":
