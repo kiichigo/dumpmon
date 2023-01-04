@@ -353,6 +353,9 @@ class Dumpmon(object):
                 filename=urllib.parse.unquote(att["fileName"]),
             )
             fn = p.join(fdr, itemname)
+            if p.isfile(fn):
+                log.info("aleady downloaded: %s" % itemname)
+                continue
             res = self.get(url)
             with open(fn, 'wb') as f:
                 f.write(res.content)
