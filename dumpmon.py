@@ -632,50 +632,6 @@ def renrakuToText(item):
     return text
 
 
-# def procRenraku(item):
-#     text = renrakuToText(item)
-#     fn = "%(display_date)s [連絡帳].txt" % item
-#     print(fn)
-#     with open(getOutputPath(item, fn), "w", encoding="utf-8") as f:
-#         f.write(text)
-
-
-# def procItem(session, item):
-#     keys = ['display_date', 'id', 'kind', 'service_id', 'timeline_kind']
-#     fn = "%s.txt" % item["id"]
-
-#     if item["kind"] == "4":
-#         procRenraku(item)
-
-#     if p.isfile(p.join(_DATA, "id", fn)):
-#         return
-
-#     if item["kind"] == "1":  # お知らせ
-#         download(session, item)
-#     elif item["kind"] == "4":  # 連絡帳
-#         procRenraku(item)
-#     elif item["kind"] in ["6"]:  # アンケート
-#         print("skip; %s" % item["id"])
-#         print([item[x] for x in keys])
-#         return
-#     elif item["kind"] in ["3", "7"]:
-#         pass
-#     elif item["kind"] == "8": # 遅刻・欠席連絡
-#         pass
-#     elif item["kind"] in ["9"]:  # 都合欠
-#         pass
-#     else:
-#         raise RuntimeError("unknown kind: %r" % item)
-
-#     with open(p.join(_ID_DIR, fn), 'w') as f:
-#         json.dump(item, f)
-
-
-# def procPage(session, data):
-#     for i, item in enumerate(data):
-#         print("[%d]" % i)
-#         procItem(session, item)
-
 
 def main():
     """
