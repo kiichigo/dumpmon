@@ -553,14 +553,14 @@ class Dumpmon(object):
                 if cur_date is None or cur_date != item_datetime.date():
                     cur_date = item_datetime.date()
                     with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
-                        f.write("\n\n------ [%s] ------\n" % cur_date.isoformat()) 
+                        f.write("\n\n------ [%s] ------\n" % cur_date.isoformat())
                 fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_datetime.strftime("%Y-%m")}
                 note = itemObjMap[item_src](item)
                 if note:
                     with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
                         f.write(note)
                 log.debug("dt: %s %r" % (item_src, item_datetime))
-    
+
     def makeNote_simpleContent(self, item):
         content = re.sub(r"</(h\d|p|br)>", "\n", item["content"], flags=re.MULTILINE)
         content = re.sub(r"<.*?>", " ", content, flags=re.MULTILINE | re.DOTALL)
@@ -756,8 +756,7 @@ class TimelineItem(object):
             f.write(res.content)
 
 
-
-
+# --- util
 
 def parseContnentDisporition(cd):
     log.debug(urllib.parse.unquote(cd))
@@ -767,84 +766,6 @@ def parseContnentDisporition(cd):
     if len(fns[0]) != 2:
         raise RuntimeError("bad cd: %s" % cd)
     return urllib.parse.unquote(fns[0][1])
-
-
-def renrakuToText(item):
-    assert item["kind"] == "4"
-    c = json.loads(item["content"])
-    memo = re.sub(r"<.*?>", "\n", c["memo"])
-    lines = []
-    for line in memo.split("\n"):
-        lines.extend(textwrap.wrap(line, width=30))
-    memo = "\n".join(lines)
-
-    mood_ = []
-    if "mood_morning" in c:
-        mood_.append("朝(%s)" % c["mood_morning"])
-    if "mood_afternoon" in c:
-        mood_.append("夕(%s)" % c["mood_afternoon"])
-    if mood_:
-        mood = " ".join(["機嫌"] + mood_) + "\n"
-    else:
-        mood = ""
-
-    if "sleepings" in c:
-        slp = "午睡 " + c["sleepings"] + "\n"
-    else:
-        slp = "午睡なし"
-    ts = []
-    for t in c["tempratures"]:
-        ts.append("%s℃(%s)" % (t["temprature"], t["temprature_time"]))
-    temp = "\n".join(ts)
-
-    text = item["display_date"] + "\n\n" + memo + "\n\n" + c["meal"] + "\n" + mood + "\n" + slp + "\n" + temp + "\n"
-
-    return text
-
-
-# def procRenraku(item):
-#     text = renrakuToText(item)
-#     fn = "%(display_date)s [連絡帳].txt" % item
-#     print(fn)
-#     with open(getOutputPath(item, fn), "w", encoding="utf-8") as f:
-#         f.write(text)
-
-
-# def procItem(session, item):
-#     keys = ['display_date', 'id', 'kind', 'service_id', 'timeline_kind']
-#     fn = "%s.txt" % item["id"]
-
-#     if item["kind"] == "4":
-#         procRenraku(item)
-
-#     if p.isfile(p.join(_DATA, "id", fn)):
-#         return
-
-#     if item["kind"] == "1":  # お知らせ
-#         download(session, item)
-#     elif item["kind"] == "4":  # 連絡帳
-#         procRenraku(item)
-#     elif item["kind"] in ["6"]:  # アンケート
-#         print("skip; %s" % item["id"])
-#         print([item[x] for x in keys])
-#         return
-#     elif item["kind"] in ["3", "7"]:
-#         pass
-#     elif item["kind"] == "8": # 遅刻・欠席連絡
-#         pass
-#     elif item["kind"] in ["9"]:  # 都合欠
-#         pass
-#     else:
-#         raise RuntimeError("unknown kind: %r" % item)
-
-#     with open(p.join(_ID_DIR, fn), 'w') as f:
-#         json.dump(item, f)
-
-
-# def procPage(session, data):
-#     for i, item in enumerate(data):
-#         print("[%d]" % i)
-#         procItem(session, item)
 
 
 def main():
