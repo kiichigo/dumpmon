@@ -529,16 +529,186 @@ class Dumpmon(object):
     # --- communication notebook
 
     def makenote(self):
-        items = []
-        items += self.iterDumpedTimeline()
-        log.debug("numItems: %d" % len(items))
-        items += self.iterDumpedComments()
-        log.debug("numItems: %d" % len(items))
-        items += self.iterDumpedContactResponses()
-        log.debug("numItems: %d" % len(items))
-        items = sorted(items, key=self.itemDateTime)
-        for item in items:
-            log.debug("dt: %r" % self.itemDateTime(item))
+        itemObjMap = {
+            "timeline": self.procTimeLineItem,
+            "comment": self.procCommentItem,
+            "contactresponse": self.procContactResponseItem
+        }
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            items = []
+            items += [("timeline", self.itemDateTime(x), x) for x in self.iterDumpedTimeline(service_id=sid)]
+            items += [("comment", self.itemDateTime(x), x) for x in self.iterDumpedComments(service_id=sid)]
+            items += [("contactresponse", self.itemDateTime(x), x) for x in self.iterDumpedContactResponses(service_id=sid)]
+            items = sorted(items, key=lambda x: x[1])
+            fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
+            if not p.isdir(fdr):
+                os.makedirs(fdr)
+            for item_src, item_datetime, item in items:
+                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_datetime.strftime("%Y-%m")}
+                if p.isfile(p.join(fdr, fn)):
+                    os.remove(p.join(fdr, fn))
+            cur_date = None
+            for item_src, item_datetime, item in items:
+                if cur_date is None or cur_date != item_datetime.date():
+                    cur_date = item_datetime.date()
+                    with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
+                        f.write("\n\n------ [%s] ------\n" % cur_date.isoformat()) 
+                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_datetime.strftime("%Y-%m")}
+                note = itemObjMap[item_src](item)
+                if note:
+                    with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
+                        f.write(note)
+                log.debug("dt: %s %r" % (item_src, item_datetime))
+    
+    def makeNote_simpleContent(self, item):
+        content = re.sub(r"</(h\d|p|br)>", "\n", item["content"], flags=re.MULTILINE)
+        content = re.sub(r"<.*?>", " ", content, flags=re.MULTILINE | re.DOTALL)
+        content = re.sub(r"\s{3,}", " ", content)
+        content = re.sub(r"\n{3,}", "\n\n", content, flags=re.MULTILINE)
+        content = "\n".join(
+            "\n".join(textwrap.wrap(line, width=30)) for line in content.split("\n")
+        )
+        note = (
+            "\n--- %(insert_datetime)s\n"
+            "* %(title)s\n"
+            "%(content)s\n"
+        ) % dict(
+            insert_datetime=item["insert_datetime"],
+            title=item["title"],
+            content=content
+        )
+        return note
+
+    def makeNote_renraku(self, item):
+        assert item["kind"] == "4"
+        c = json.loads(item["content"])
+        memo = re.sub(r"<.*?>", "\n", c["memo"])
+        lines = []
+        for line in memo.split("\n"):
+            lines.extend(textwrap.wrap(line, width=30))
+        memo = "\n".join(lines)
+
+        mood_ = []
+        if "mood_morning" in c:
+            mood_.append("朝(%s)" % c["mood_morning"])
+        if "mood_afternoon" in c:
+            mood_.append("夕(%s)" % c["mood_afternoon"])
+        if mood_:
+            mood = " ".join(["機嫌"] + mood_) + "\n"
+        else:
+            mood = ""
+
+        if "sleepings" in c:
+            slp = "午睡 " + c["sleepings"] + "\n"
+        else:
+            slp = "午睡なし"
+        ts = []
+        for t in c["tempratures"]:
+            ts.append("%s℃(%s)" % (t["temprature"], t["temprature_time"]))
+        temp = "\n".join(ts)
+
+        text = "\n---" + item["insert_datetime"] + "\n\n" + memo + "\n\n" + c["meal"] + "\n" + mood + "\n" + slp + "\n" + temp + "\n"
+
+        return text
+
+    def procTimeLineItem(self, item):
+        if "kind" in item:
+            kind = item["kind"]
+        elif "timeline_kind" in item:
+            kind = item["timeline_kind"]
+        else:
+            kind = None
+        if kind == "1":  # お知0らせ
+            return self.makeNote_simpleContent(item)
+        elif kind == "3":
+            pass
+        elif kind == "4":  # 連絡帳
+            return self.makeNote_renraku(item)
+        elif kind == "6":  # アンケート
+            return  # self.makeNote_simpleContent(item)
+        elif kind == "7":
+            pass
+        elif kind == "8":  # 遅刻・欠席連絡
+            pass
+        elif kind == "9":  # 都合欠
+            pass
+        elif kind == "bills":
+            return ""
+        raise RuntimeError("unknown kind: %r" % item)
+
+    def procCommentItem(self, item):
+        kind = item["kind"]
+        if kind == "2":  # 連絡帳（保護者）
+            content = json.loads(item["content"])
+            # print(json.dumps(content, indent=4, ensure_ascii=False))
+            """
+{
+    "mood_evening": "良い",
+    "evacuation_evening_times": "1",
+    "evacuation_evening": "硬便",
+    "meal_evening": "カレーライス\nフツウン炊いたご飯に和光堂のカレーをかけて混ぜたもの\n野菜ジュース　食塩無添加\n\n完食　にこにこ機嫌よく食べた",
+    "sleep": "22:30",
+    "memo": "昨日は第二いちご保育園の一日目を楽しんで過ごせたように思います。\n砂場で遊ぶのも本人にとって初めてのことでした。\n家では祖父母が遊んでくれてニコニコと過ごしました。\n夜はママと一緒
+にシャワーを浴びました。\n食欲もあり鼻水も出ていません。\n",
+    "wake": "6:30",
+    "pool": "〇",
+    "meal_morning": "和光堂「角煮チャーハン」　完食\n茹　でにんじん　カリフラワー　ブロッコリー\n冷凍の洋風野菜ミックスを茹でたもの　少しつかみ食べ\n\nよく食べた。",
+    "temprature": "37.2",
+    "temprature_time": "7:30"
+}
+"""
+            lines = []
+            lines.append("\n---" + item["insert_datetime"])
+
+            mood_ = []
+            if "mood_afternoon" in content:
+                mood_.append("夕(%s)" % content["mood_afternoon"])
+            if "mood_morning" in content:
+                mood_.append("朝(%s)" % content["mood_morning"])
+            if mood_:
+                lines.append(" ".join(["機嫌"] + mood_))
+
+            ev_ = []
+            if "evacuation_evening" in content:
+                ev_.append("夕 (%s) " % content["evacuation_evening"])
+            if "evacuation_morning" in content:
+                ev_.append("朝 (%s) " % content["evacuation_morning"])
+            if ev_:
+                lines.append(" ".join(["排便"] + ev_))
+
+            meal_ = []
+            if "meal_evening" in content:
+                meal_.append("夕食: \n" + content["meal_evening"] + "\n")
+            if "meal_morning" in content:
+                meal_.append("朝食: \n" + content["meal_morning"] + "\n")
+            if meal_:
+                lines.append("\n".join(["食事"] + meal_))
+
+            if "temprature" in content:
+                lines.append("検温: %(temprature_time)s %(temprature)s ℃" % content)
+
+            if "memo" in content:
+                lines.append("%(memo)s" % content)
+            return "\n".join(lines) + "\n"
+
+        raise RuntimeError("unknown kind: %r" % item)
+
+    def procContactResponseItem(self, item):
+        kind = item["kind"]
+        if kind == "3":
+            return self.makeNote_simpleContent(item)
+        elif kind == "6":  # 遅刻・欠席連絡
+            return self.makeNote_simpleContent(item)
+        elif kind == "7":  # '
+            return self.makeNote_simpleContent(item)
+        elif kind == "8":  # 病欠
+            return self.makeNote_simpleContent(item)
+        elif kind == "9":  # 病欠
+            return self.makeNote_simpleContent(item)
+
+        raise RuntimeError("unknown kind: %r" % item)
+
 
 class TimelineItem(object):
     def __init__(self, dumpmon, item):
@@ -586,6 +756,9 @@ class TimelineItem(object):
             f.write(res.content)
 
 
+
+
+
 def parseContnentDisporition(cd):
     log.debug(urllib.parse.unquote(cd))
     fns = re.findall(r'filename\*=([\w-]+)\'\'([\w\.%\(\)\+\-]+)$', cd)
@@ -624,7 +797,7 @@ def renrakuToText(item):
         ts.append("%s℃(%s)" % (t["temprature"], t["temprature_time"]))
     temp = "\n".join(ts)
 
-    text = item["display_date"] + "\n\n" + memo + "\n\n" + c["meal"] + "\n" + mood + "\n" + slp + "\n" + temp
+    text = item["display_date"] + "\n\n" + memo + "\n\n" + c["meal"] + "\n" + mood + "\n" + slp + "\n" + temp + "\n"
 
     return text
 
