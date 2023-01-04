@@ -539,25 +539,37 @@ class Dumpmon(object):
         }
         srvs = self.getServices()
         for sid in srvs.keys():
+            def getItems(items, category, itemsGetFunc):
+                for item in itemsGetFunc(service_id=sid):
+                    date_time = self.itemDateTime(item)
+                    if "display_date" in item:
+                        display_date = date.fromisoformat(item["display_date"])
+                    else:
+                        display_date = date_time.date()
+                    items.append((category, display_date, date_time, item))
             items = []
-            items += [("timeline", self.itemDateTime(x), x) for x in self.iterDumpedTimeline(service_id=sid)]
-            items += [("comment", self.itemDateTime(x), x) for x in self.iterDumpedComments(service_id=sid)]
-            items += [("contactresponse", self.itemDateTime(x), x) for x in self.iterDumpedContactResponses(service_id=sid)]
-            items = sorted(items, key=lambda x: x[1])
+            getItems(items, "timeline", self.iterDumpedTimeline)
+            getItems(items, "comment", self.iterDumpedComments)
+            getItems(items, "contactresponse", self.iterDumpedContactResponses)
+            items = sorted(items, key=lambda x: x[1:3])
             fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
             if not p.isdir(fdr):
                 os.makedirs(fdr)
-            for item_src, item_datetime, item in items:
-                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_datetime.strftime("%Y-%m")}
+            for item_src, item_displaydate, item_datetime, item in items:
+                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_displaydate.strftime("%Y-%m")}
                 if p.isfile(p.join(fdr, fn)):
                     os.remove(p.join(fdr, fn))
             cur_date = None
-            for item_src, item_datetime, item in items:
-                if cur_date is None or cur_date != item_datetime.date():
-                    cur_date = item_datetime.date()
+            cur_fn = None
+            for item_src, item_displaydate, item_datetime, item in items:
+                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_displaydate.strftime("%Y-%m")}
+                if cur_fn is None or cur_fn != fn:
+                    cur_fn = fn
+                    cur_date = None
+                if cur_date is None or cur_date != item_displaydate:
+                    cur_date = item_displaydate
                     with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
                         f.write("\n\n------ [%s] ------\n" % cur_date.isoformat())
-                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_datetime.strftime("%Y-%m")}
                 note = itemObjMap[item_src](item)
                 if note:
                     with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
@@ -794,6 +806,7 @@ def main():
     parser.add_argument("-v", "--verbosity", help="increase output verbosity", action="store_true")
 
     args = parser.parse_args()
+
     if args.verbosity:
         print("verbosity turned on")
         logging.basicConfig(level=logging.DEBUG)
@@ -810,6 +823,9 @@ def main():
         s_date = date.today()
         e_date = s_date - timedelta(7)
 
+    partialExecutionEnabled = args.fetch or args.download or args.makenote
+    allExecute = not partialExecutionEnabled
+
     log.debug("debug")
     c = Dumpmon(start_date=s_date, end_date=e_date)
     if not c.testLogin():
@@ -818,19 +834,19 @@ def main():
             c.login(useSavedId=False)
 
     # dump json
-    if args.fetch:
+    if allExecute or args.fetch:
         c.dumpTimeline()
         c.dumpComments()
         c.dumpContactResponses()
         c.dumpHandouts()
 
     # download attach file
-    if args.download:
+    if allExecute or args.download:
         c.downloadTimeline()
         c.downloadAllHandout()
 
     # meke communication notebook
-    if args.makenote:
+    if allExecute or args.makenote:
         c.makenote()
 
 
