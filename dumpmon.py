@@ -72,6 +72,7 @@ class Dumpmon(object):
         self.appdatadir = get_appdatadir() / "dumpmon"
         self.cookiefile = p.join(self.appdatadir, "cookie.dat")
         self.services_cache = None
+        self.children_cache = None
         try:
             self.appdatadir.mkdir(parents=True)
         except FileExistsError:
@@ -168,13 +169,18 @@ class Dumpmon(object):
         if self.services_cache is not None:
             return self.services_cache
         url = _API_URL + "/services"
-        res = self.session.get(url)
-        if res.status_code != 200:
-            raise RuntimeError("%r" % res)
-        resj = res.json()
-        assert resj["success"]
+        resj = self.getJson(url)
+        # res = self.session.get(url)
+        # if res.status_code != 200:
+        #     raise RuntimeError("%r" % res)
+        # resj = res.json()
+        # assert resj["success"]
         self.services_cache = resj["data"]
         return resj["data"]
+
+    def dumpServices(self):
+        fn = p.join(_DUMPDIR, "services.json")
+        self.dumpjson(fn, self.getServices())
 
     # --- filter util date range
 
@@ -311,7 +317,7 @@ class Dumpmon(object):
                 txt_fn = fn_head + ".txt"
                 with open(p.join(fdr, txt_fn), 'w', encoding="utf-8") as f:
                     f.write(self.makeNote_simpleContent(item))
-            
+
     # --- handout
 
     def getSID(self):
@@ -377,7 +383,7 @@ class Dumpmon(object):
                 yield item
 
     def downloadHandout(self, item):
-        fdr = p.join(_OUTPUTDIR, "handouts")
+        fdr = p.join(_OUTPUTDIR, "資料室")
         if not p.isdir(fdr):
             os.makedirs(fdr)
         for i, att in enumerate(item["attachments"]):
@@ -406,14 +412,17 @@ class Dumpmon(object):
 
     def getChildren(self):
         """
-        https://ps-api.codmon.com/api/v2/parent/children/
-            ?use_image_edge=true
-            &__env__=myapp
         """
+        if self.children_cache is not None:
+            return self.children_cache
         url = "https://ps-api.codmon.com/api/v2/parent/children/"
-        return self.getJson(url)
+        resj = self.getJson(url)
+        self.children_cache = resj
+        return resj
 
-    # -- comments
+    def dumpChildren(self):
+        fn = p.join(_DUMPDIR, 'children.json')
+        self.dumpjson(fn, self.getChildren())
 
     def iterCMR(self, service_id=None):
         u"""
@@ -427,15 +436,16 @@ class Dumpmon(object):
                     continue
                 yield rel
 
+    def srcIdFromMemId(self, memId):
+        u""" member_id から service_id を得る """
+        for cmr in self.iterCMR():
+            if cmr["member_id"] == memId:
+                return cmr["service_id"]
+
+    # -- comments
+
     def iterComments(self, service_id):
         """
-        https://ps-api.codmon.com/api/v2/parent/comments/
-            ?search_kind=2
-            &relation_id=
-            &relation_kind=2
-            &search_start_display_date=2022-12-26
-            &search_end_display_date=2022-12-26
-            &__env__=myapp
         """
         for cmr in self.iterCMR(service_id):
             o_date = cmr["member_open_date"]
@@ -692,23 +702,6 @@ class Dumpmon(object):
         kind = item["kind"]
         if kind == "2":  # 連絡帳（保護者）
             content = json.loads(item["content"])
-            # print(json.dumps(content, indent=4, ensure_ascii=False))
-            """
-{
-    "mood_evening": "良い",
-    "evacuation_evening_times": "1",
-    "evacuation_evening": "硬便",
-    "meal_evening": "カレーライス\nフツウン炊いたご飯に和光堂のカレーをかけて混ぜたもの\n野菜ジュース　食塩無添加\n\n完食　にこにこ機嫌よく食べた",
-    "sleep": "22:30",
-    "memo": "昨日は第二いちご保育園の一日目を楽しんで過ごせたように思います。\n砂場で遊ぶのも本人にとって初めてのことでした。\n家では祖父母が遊んでくれてニコニコと過ごしました。\n夜はママと一緒
-にシャワーを浴びました。\n食欲もあり鼻水も出ていません。\n",
-    "wake": "6:30",
-    "pool": "〇",
-    "meal_morning": "和光堂「角煮チャーハン」　完食\n茹　でにんじん　カリフラワー　ブロッコリー\n冷凍の洋風野菜ミックスを茹でたもの　少しつかみ食べ\n\nよく食べた。",
-    "temprature": "37.2",
-    "temprature_time": "7:30"
-}
-"""
             lines = []
             lines.append("\n---" + item["insert_datetime"])
 
@@ -761,52 +754,6 @@ class Dumpmon(object):
         raise RuntimeError("unknown kind: %r" % item)
 
 
-# class TimelineItem(object):
-#     def __init__(self, dumpmon, item):
-#         self.dumpmon = dumpmon
-#         self.item = item
-
-#     def getOutputPath(self):
-#         display_date = self.item["display_date"]
-#         title = self.item.get("title", "")
-
-#         if re.search(r"ねこ|幼児", title):
-#             outfolder = p.join(_OUTPUTDIR, "etc")
-#         else:
-#             m = re.match(r'(\d{4}-\d{2})-\d{2}', display_date)
-#             if not m:
-#                 raise RuntimeError("invalid display_date: %r" % display_date)
-#             yyyy_dd = m.group(1)
-#             outfolder = p.join(_OUTPUTDIR, yyyy_dd)
-#         if not p.isdir(outfolder):
-#             os.makedirs(outfolder)
-#         return outfolder
-
-#     def download(self):
-#         if "file_url" not in self.item:
-#             return
-#         if self.item["file_url"] is None:
-#             return
-
-#         # if p.isfile(full):
-#         #    log.info("aleady exists. skip download: %s" % fn)
-
-#         url = _TOP_URL + self.item["file_url"]
-#         res = self.dumpmon.get(url)
-
-#         try:
-#             cd = res.headers['Content-Disposition']
-#             name = parseContnentDisporition(cd)
-#         except Exception:
-#             print(self.item)
-#             raise
-
-#         fn = ("%(display_date)s [%(title)s]" % self.item) + name
-#         full = p.join(self.getOutputPath(), fn)
-#         with open(full, 'wb') as f:
-#             f.write(res.content)
-
-
 # --- util
 
 def parseContnentDisporition(cd):
@@ -821,9 +768,9 @@ def parseContnentDisporition(cd):
 
 def main():
     """
-    --all none none
-    --day 5 doday, today-5
-    --range
+    コドモンにログインして閲覧できる情報をダウンロードする
+    オプションを指定しないと、直近７日間のデータを取得します。
+
     """
     parser = argparse.ArgumentParser()
 
@@ -869,7 +816,9 @@ def main():
         while (not c.testLogin()):
             c.login(useSavedId=False)
     c.saveCookie()
-
+    c.dumpServices()
+    c.dumpChildren()
+  
     # dump json
     if allExecute or args.fetch:
         c.dumpTimeline()
