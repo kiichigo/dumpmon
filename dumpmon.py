@@ -139,7 +139,7 @@ class Dumpmon(object):
         res = self.session.get(url, headers=headers)
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
-        sleep(0.5)
+        sleep(1.0)
         return res
 
     def getJson(self, url):
@@ -272,10 +272,46 @@ class Dumpmon(object):
                     yield item
 
     def downloadTimeline(self):
-        for item in self.iterDumpedTimeline():
-            tl = TimelineItem(self, item)
-            tl.download()
+        log.debug("download")
 
+        def dlFileExists(fdr_name, fn_head):
+            for fn in os.listdir(fdr_name):
+                if fn.startswith(fn_head):
+                    return True
+
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            log.debug("service: %s" % sid)
+
+            s_fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
+            for item in self.iterDumpedTimeline(service_id=sid):
+                if "file_url" not in item or item["file_url"] is None:
+                    continue
+                item_displaydate = date.fromisoformat(item["display_date"])
+                fdr_name = "%(YYYY-MM)s attachments" % {"YYYY-MM": item_displaydate.strftime("%Y-%m")}
+                log.debug("fdr_name: %s" % fdr_name)
+                fdr = p.join(s_fdr, fdr_name)
+                if not p.isdir(fdr):
+                    os.makedirs(fdr)
+                fn_head = ("%(display_date)s [%(title)s]" % item)
+
+                if dlFileExists(fdr, fn_head):
+                    log.info("aleady exists. skip download: %s" % fn_head)
+                    continue
+
+                url = _TOP_URL + item["file_url"]
+                res = self.get(url)
+                cd = res.headers['Content-Disposition']
+                dl_name = parseContnentDisporition(cd)
+
+                fn = fn_head + " " + dl_name
+                with open(p.join(fdr, fn), 'wb') as f:
+                    f.write(res.content)
+
+                txt_fn = fn_head + ".txt"
+                with open(p.join(fdr, txt_fn), 'w', encoding="utf-8") as f:
+                    f.write(self.makeNote_simpleContent(item))
+            
     # --- handout
 
     def getSID(self):
@@ -585,11 +621,11 @@ class Dumpmon(object):
             "\n".join(textwrap.wrap(line, width=30)) for line in content.split("\n")
         )
         note = (
-            "\n--- %(insert_datetime)s\n"
+            "\n--- %(date_time)s\n"
             "* %(title)s\n"
             "%(content)s\n"
         ) % dict(
-            insert_datetime=item["insert_datetime"],
+            date_time=self.itemDateTime(item),
             title=item["title"],
             content=content
         )
@@ -645,9 +681,9 @@ class Dumpmon(object):
         elif kind == "7":
             pass
         elif kind == "8":  # 遅刻・欠席連絡
-            pass
+            return self.makeNote_simpleContent(item)
         elif kind == "9":  # 都合欠
-            pass
+            return self.makeNote_simpleContent(item)
         elif kind == "bills":
             return ""
         raise RuntimeError("unknown kind: %r" % item)
@@ -725,50 +761,50 @@ class Dumpmon(object):
         raise RuntimeError("unknown kind: %r" % item)
 
 
-class TimelineItem(object):
-    def __init__(self, dumpmon, item):
-        self.dumpmon = dumpmon
-        self.item = item
+# class TimelineItem(object):
+#     def __init__(self, dumpmon, item):
+#         self.dumpmon = dumpmon
+#         self.item = item
 
-    def getOutputPath(self):
-        display_date = self.item["display_date"]
-        title = self.item.get("title", "")
+#     def getOutputPath(self):
+#         display_date = self.item["display_date"]
+#         title = self.item.get("title", "")
 
-        if re.search(r"ねこ|幼児", title):
-            outfolder = p.join(_OUTPUTDIR, "etc")
-        else:
-            m = re.match(r'(\d{4}-\d{2})-\d{2}', display_date)
-            if not m:
-                raise RuntimeError("invalid display_date: %r" % display_date)
-            yyyy_dd = m.group(1)
-            outfolder = p.join(_OUTPUTDIR, yyyy_dd)
-        if not p.isdir(outfolder):
-            os.makedirs(outfolder)
-        return outfolder
+#         if re.search(r"ねこ|幼児", title):
+#             outfolder = p.join(_OUTPUTDIR, "etc")
+#         else:
+#             m = re.match(r'(\d{4}-\d{2})-\d{2}', display_date)
+#             if not m:
+#                 raise RuntimeError("invalid display_date: %r" % display_date)
+#             yyyy_dd = m.group(1)
+#             outfolder = p.join(_OUTPUTDIR, yyyy_dd)
+#         if not p.isdir(outfolder):
+#             os.makedirs(outfolder)
+#         return outfolder
 
-    def download(self):
-        if "file_url" not in self.item:
-            return
-        if self.item["file_url"] is None:
-            return
+#     def download(self):
+#         if "file_url" not in self.item:
+#             return
+#         if self.item["file_url"] is None:
+#             return
 
-        # if p.isfile(full):
-        #    log.info("aleady exists. skip download: %s" % fn)
+#         # if p.isfile(full):
+#         #    log.info("aleady exists. skip download: %s" % fn)
 
-        url = _TOP_URL + self.item["file_url"]
-        res = self.dumpmon.get(url)
+#         url = _TOP_URL + self.item["file_url"]
+#         res = self.dumpmon.get(url)
 
-        try:
-            cd = res.headers['Content-Disposition']
-            name = parseContnentDisporition(cd)
-        except Exception:
-            print(self.item)
-            raise
+#         try:
+#             cd = res.headers['Content-Disposition']
+#             name = parseContnentDisporition(cd)
+#         except Exception:
+#             print(self.item)
+#             raise
 
-        fn = ("%(display_date)s [%(title)s]" % self.item) + name
-        full = p.join(self.getOutputPath(), fn)
-        with open(full, 'wb') as f:
-            f.write(res.content)
+#         fn = ("%(display_date)s [%(title)s]" % self.item) + name
+#         full = p.join(self.getOutputPath(), fn)
+#         with open(full, 'wb') as f:
+#             f.write(res.content)
 
 
 # --- util
@@ -832,6 +868,7 @@ def main():
         c.login()
         while (not c.testLogin()):
             c.login(useSavedId=False)
+    c.saveCookie()
 
     # dump json
     if allExecute or args.fetch:
