@@ -54,14 +54,6 @@ _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
 
 
-def drange(s, e, includeEndDate=False):
-    days = (e - s).days
-    step = 1 if days >= 0 else -1
-    if includeEndDate:
-        days += step
-    return [s + timedelta(x) for x in range(0, days, step)]
-
-
 class Dumpmon(object):
 
     def __init__(self, start_date=None, end_date=None):
@@ -81,6 +73,11 @@ class Dumpmon(object):
         if not p.isdir(_DATA):
             os.mkdir(_DATA)
 
+        if not p.isdir(_DUMPDIR):
+            os.makedirs(_DUMPDIR)
+        if not p.isdir(_OUTPUTDIR):
+            os.makedirs(_OUTPUTDIR)
+        
     # --- Config
 
     def loadConf(self):
@@ -137,6 +134,10 @@ class Dumpmon(object):
     def get(self, url, headers=None):
         u""" HTTP GET for Codmon session"""
         log.info(url)
+        defaultHaeders = {
+            'User-Agent': 'dumpmon',
+        }
+        headers = dictmerge(defaultHaeders, (headers or {}))
         res = self.session.get(url, headers=headers)
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
@@ -682,8 +683,8 @@ class Dumpmon(object):
             kind = None
         if kind == "1":  # お知0らせ
             return self.makeNote_simpleContent(item)
-        elif kind == "3":
-            pass
+        elif kind == "3":  # 連絡
+            return self.makeNote_simpleContent(item)
         elif kind == "4":  # 連絡帳
             return self.makeNote_renraku(item)
         elif kind == "6":  # アンケート
@@ -756,6 +757,24 @@ class Dumpmon(object):
 
 # --- util
 
+def drange(s: date, e: date, includeEndDate: bool = True) -> list:
+    """Get a day-by-day date list from start date to end date
+
+    Args:
+        s (date): start date
+        e (date): end date
+        includeEndDate (bool, optional): Whether to include the last day. Defaults to False.
+
+    Returns:
+        [date]: _description_
+    """
+    days = (e - s).days
+    step = 1 if days >= 0 else -1
+    if includeEndDate:
+        days += step
+    return [s + timedelta(x) for x in range(0, days, step)]
+
+
 def parseContnentDisporition(cd):
     log.debug(urllib.parse.unquote(cd))
     fns = re.findall(r'filename\*=([\w-]+)\'\'([\w\.%\(\)\+\-]+)$', cd)
@@ -764,6 +783,10 @@ def parseContnentDisporition(cd):
     if len(fns[0]) != 2:
         raise RuntimeError("bad cd: %s" % cd)
     return urllib.parse.unquote(fns[0][1])
+
+
+def dictmerge(d1, d2):
+    return {**d1, **d2}
 
 
 def main():
@@ -818,7 +841,7 @@ def main():
     c.saveCookie()
     c.dumpServices()
     c.dumpChildren()
-  
+
     # dump json
     if allExecute or args.fetch:
         c.dumpTimeline()
