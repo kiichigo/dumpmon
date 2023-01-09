@@ -20,6 +20,7 @@ import sys
 import textwrap
 from time import sleep
 import urllib
+import unicodedata
 
 log = logging.getLogger()
 
@@ -579,13 +580,16 @@ class Dumpmon(object):
     # --- communication notebook
 
     def makenote(self):
-        itemObjMap = {
+        itemProcMap = {
             "timeline": self.procTimeLineItem,
             "comment": self.procCommentItem,
             "contactresponse": self.procContactResponseItem
         }
         srvs = self.getServices()
+        allLines = {}
         for sid in srvs.keys():
+            allLines[sid] = {}
+
             def getItems(items, category, itemsGetFunc):
                 for item in itemsGetFunc(service_id=sid):
                     date_time = self.itemDateTime(item)
@@ -594,34 +598,48 @@ class Dumpmon(object):
                     else:
                         display_date = date_time.date()
                     items.append((category, display_date, date_time, item))
+
             items = []
             getItems(items, "timeline", self.iterDumpedTimeline)
             getItems(items, "comment", self.iterDumpedComments)
             getItems(items, "contactresponse", self.iterDumpedContactResponses)
+            # DisplayDateでソートする
             items = sorted(items, key=lambda x: x[1:3])
+
+            # serviceごとのフォルダ
             fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
             if not p.isdir(fdr):
                 os.makedirs(fdr)
-            for item_src, item_displaydate, item_datetime, item in items:
-                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_displaydate.strftime("%Y-%m")}
-                if p.isfile(p.join(fdr, fn)):
-                    os.remove(p.join(fdr, fn))
+
+            # 処理中の日付
             cur_date = None
-            cur_fn = None
             for item_src, item_displaydate, item_datetime, item in items:
-                fn = "%(YYYY-MM)s note.txt" % {"YYYY-MM": item_displaydate.strftime("%Y-%m")}
-                if cur_fn is None or cur_fn != fn:
-                    cur_fn = fn
-                    cur_date = None
+                yyyymm = item_displaydate.strftime("%Y-%m")
+                # header
+                if yyyymm not in allLines[sid]:
+                    title = "%s %s" % (srvs[sid]["name"], item_displaydate.strftime("%Y年%m月"))
+                    line = "\n%(line)s\n%(title)s\n%(line)s\n" % {"title": title, "line": "=" * width(title)}
+                    allLines[sid][yyyymm] = [line]
+                # date demiliter
                 if cur_date is None or cur_date != item_displaydate:
                     cur_date = item_displaydate
-                    with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
-                        f.write("\n\n------ [%s] ------\n" % cur_date.isoformat())
-                note = itemObjMap[item_src](item)
-                if note:
-                    with open(p.join(fdr, fn), 'a', encoding="utf-8") as f:
-                        f.write(note)
-                log.debug("dt: %s %r" % (item_src, item_datetime))
+                    title = "%s" % item_displaydate.strftime("%m月%d日")
+                    line = "\n%s\n%s\n" % (title, "=" * width(title))
+                    allLines[sid][yyyymm].append(line)
+                itemProcFunc = itemProcMap[item_src]
+                lines = itemProcFunc(item)
+                if lines:
+                    allLines[sid][yyyymm].extend(lines)
+
+            # footer
+            for yyyymm in allLines[sid].keys():
+                pass
+        
+            for yyyymm in allLines[sid].keys():
+                fn = "%s note.rst" % yyyymm
+                with open(p.join(fdr, fn), 'w', encoding="utf-8") as f:
+                    txt = "\n".join(allLines[sid][yyyymm])
+                    f.write(txt)     
 
     def makeNote_simpleContent(self, item):
         content = re.sub(r"</(h\d|p|br)>", "\n", item["content"], flags=re.MULTILINE)
@@ -631,22 +649,30 @@ class Dumpmon(object):
         content = "\n".join(
             "\n".join(textwrap.wrap(line, width=30)) for line in content.split("\n")
         )
+        _time = self.itemDateTime(item).strftime("%H:%M")
+        title = item["title"] + " " + _time
         note = (
-            "\n--- %(date_time)s\n"
-            "* %(title)s\n"
+            "\n"
+            "%(title)s\n"
+            "%(line)s\n"
             "%(content)s\n"
         ) % dict(
-            date_time=self.itemDateTime(item),
-            title=item["title"],
+            title=title,
+            line="-" * width(title),
             content=content
         )
-        return note
+        return [note]
 
     def makeNote_renraku(self, item):
         assert item["kind"] == "4"
         c = json.loads(item["content"])
         memo = re.sub(r"<.*?>", "\n", c["memo"])
         lines = []
+
+        _time = self.itemDateTime(item).strftime("%H:%M")
+        title = "連絡帳 " + _time
+        lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
+
         for line in memo.split("\n"):
             lines.extend(textwrap.wrap(line, width=30))
         memo = "\n".join(lines)
@@ -670,9 +696,9 @@ class Dumpmon(object):
             ts.append("%s℃(%s)" % (t["temprature"], t["temprature_time"]))
         temp = "\n".join(ts)
 
-        text = "\n---" + item["insert_datetime"] + "\n\n" + memo + "\n\n" + c["meal"] + "\n" + mood + "\n" + slp + "\n" + temp + "\n"
+        text =  "\n\n" + memo + "\n\n" + c["meal"] + "\n" + mood + "\n" + slp + "\n" + temp + "\n"
 
-        return text
+        return [text]
 
     def procTimeLineItem(self, item):
         if "kind" in item:
@@ -704,7 +730,10 @@ class Dumpmon(object):
         if kind == "2":  # 連絡帳（保護者）
             content = json.loads(item["content"])
             lines = []
-            lines.append("\n---" + item["insert_datetime"])
+
+            _time = self.itemDateTime(item).strftime("%H:%M")
+            title = "保護者連絡 " + _time
+            lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
 
             mood_ = []
             if "mood_afternoon" in content:
@@ -735,7 +764,7 @@ class Dumpmon(object):
 
             if "memo" in content:
                 lines.append("%(memo)s" % content)
-            return "\n".join(lines) + "\n"
+            return lines
 
         raise RuntimeError("unknown kind: %r" % item)
 
@@ -788,6 +817,9 @@ def parseContnentDisporition(cd):
 def dictmerge(d1, d2):
     return {**d1, **d2}
 
+
+def width(txt: str):
+    return sum(2 if unicodedata.east_asian_width(x) in 'FWA' else 1 for x in txt)
 
 def main():
     """
