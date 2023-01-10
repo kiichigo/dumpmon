@@ -675,6 +675,7 @@ class Dumpmon(object):
 
         for line in memo.split("\n"):
             lines.extend(textwrap.wrap(line, width=30))
+            lines.append("\n")
         memo = "\n".join(lines)
 
         mood_ = []
@@ -753,9 +754,9 @@ class Dumpmon(object):
 
             meal_ = []
             if "meal_evening" in content:
-                meal_.append("夕食: \n" + content["meal_evening"] + "\n")
+                meal_.append("夕食: \n    " + content["meal_evening"] + "\n")
             if "meal_morning" in content:
-                meal_.append("朝食: \n" + content["meal_morning"] + "\n")
+                meal_.append("朝食: \n    " + content["meal_morning"] + "\n")
             if meal_:
                 lines.append("\n".join(["食事"] + meal_))
 
@@ -763,7 +764,9 @@ class Dumpmon(object):
                 lines.append("検温: %(temprature_time)s %(temprature)s ℃" % content)
 
             if "memo" in content:
-                lines.append("%(memo)s" % content)
+                memo = content["memo"]
+                memo.replace("\n", "\n\n")
+                lines.append("%(memo)s" % {"memo": memo})
             return lines
 
         raise RuntimeError("unknown kind: %r" % item)
