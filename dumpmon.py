@@ -78,7 +78,7 @@ class Dumpmon(object):
             os.makedirs(_DUMPDIR)
         if not p.isdir(_OUTPUTDIR):
             os.makedirs(_OUTPUTDIR)
-        
+
     # --- Config
 
     def loadConf(self):
@@ -634,72 +634,111 @@ class Dumpmon(object):
             # footer
             for yyyymm in allLines[sid].keys():
                 pass
-        
+
             for yyyymm in allLines[sid].keys():
                 fn = "%s note.rst" % yyyymm
                 with open(p.join(fdr, fn), 'w', encoding="utf-8") as f:
                     txt = "\n".join(allLines[sid][yyyymm])
-                    f.write(txt)     
+                    f.write(txt)
 
     def makeNote_simpleContent(self, item):
-        content = re.sub(r"</(h\d|p|br)>", "\n", item["content"], flags=re.MULTILINE)
-        content = re.sub(r"<.*?>", " ", content, flags=re.MULTILINE | re.DOTALL)
-        content = re.sub(r"\s{3,}", " ", content)
-        content = re.sub(r"\n{3,}", "\n\n", content, flags=re.MULTILINE)
-        content = "\n".join(
-            "\n".join(textwrap.wrap(line, width=30)) for line in content.split("\n")
-        )
+        lines = ["\n"]
+
+        def htmlTableToRstListTable(txt):
+            def procTable(m):
+                txt = m.group(1)
+                rows = []
+                for tr in re.finditer(r"<tr.*?>(.*?)</tr>", txt):
+                    row = tr.group(1)
+                    cols = []
+                    for td in re.finditer(r"<td.*?>(.*?)</td>", row):
+                        col = td.group(1)
+                        col = re.sub(r"<.*?>", " ", col, flags=re.MULTILINE | re.DOTALL)
+                        cols.append(col)
+                    rows.append(cols)
+                maxcol = max([len(x) for x in rows])
+                indent = " " * 4
+                lines = ["\n"]
+                lines.append(".. list-table::\n")
+                for row in rows:
+                    for i, col in enumerate(row):
+                        line = indent + "%s %s %s" % ("*" if i == 0 else " ", "-", col)
+                        lines.append(line)
+                    for dummy in range(len(row), maxcol):
+                        line = indent + " - "
+                        lines.append(line)
+                lines = ["TABLEMARK" + x for x in lines]
+                return "\n".join(lines) + "\n"
+            return re.sub(r"<table.*?>(.*?)</table>", procTable, txt)
+
+        def procContent(content):
+            content = htmlTableToRstListTable(content)
+            # HTMLの一部タグを改行にする
+            content = re.sub(r"<br>", "\n", content, flags=re.MULTILINE)
+            content = re.sub(r"</(h\d|p)>", "\n", content, flags=re.MULTILINE)
+            # その他タグを削除する。
+            content = re.sub(r"<.*?>", " ", content, flags=re.MULTILINE | re.DOTALL)
+            content = re.sub(r"&nbsp;", " ", content, flags=re.MULTILINE)
+            # 3個以上の連続した空白文字を3個にする
+            # content = re.sub(r"[\t 　]{3,}", " ", content)
+            # 3個以上の連続した改行を2個にする
+            content = re.sub(r"\n{3,}", "\n\n", content, flags=re.MULTILINE)
+            content = re.sub(r"^[ 　]+", "", content, flags=re.MULTILINE)
+
+            def wrapJoin(m):
+                line = m.group(1)
+                return "\n".join(textwrap.wrap(line, width=30))
+            content = re.sub(r"^(.*?)$", wrapJoin, content)
+            content = re.sub(r"^TABLEMARK(.*?)$", r"\1", content, flags=re.MULTILINE)
+            return content
+
         _time = self.itemDateTime(item).strftime("%H:%M")
         title = item["title"] + " " + _time
-        note = (
-            "\n"
-            "%(title)s\n"
-            "%(line)s\n"
-            "%(content)s\n"
-        ) % dict(
-            title=title,
-            line="-" * width(title),
-            content=content
-        )
-        return [note]
+        lines.append(title)
+        lines.append("-" * width(title))
+
+        lines.append(procContent(item["content"]))
+        return lines
 
     def makeNote_renraku(self, item):
         assert item["kind"] == "4"
         c = json.loads(item["content"])
         memo = re.sub(r"<.*?>", "\n", c["memo"])
-        lines = []
+        lines = ["\n"]
 
         _time = self.itemDateTime(item).strftime("%H:%M")
-        title = "連絡帳 " + _time
+        title = "\n連絡帳 " + _time
         lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
 
         for line in memo.split("\n"):
-            lines.extend(textwrap.wrap(line, width=30))
+            wrappedLines = [x for x in textwrap.wrap(line, width=30) if x]
+            lines.extend(wrappedLines)
             lines.append("\n")
         memo = "\n".join(lines)
-
+        indent = " " * 4
         mood_ = []
         if "mood_morning" in c:
-            mood_.append("朝(%s)" % c["mood_morning"])
+            mood_.append(indent + "| 朝(%s)" % c["mood_morning"])
         if "mood_afternoon" in c:
-            mood_.append("夕(%s)" % c["mood_afternoon"])
+            mood_.append(indent + "| 夕(%s)" % c["mood_afternoon"])
         if mood_:
-            mood = " ".join(["機嫌"] + mood_) + "\n"
-        else:
-            mood = ""
+            lines.append("\n機嫌")
+            lines.extend(mood_)
 
-        if "sleepings" in c:
-            slp = "午睡 " + c["sleepings"] + "\n"
+        if "sleepings" in c and c["sleepings"]:
+            slp = "\n午睡" + "\n" + indent + "| " + c["sleepings"] + "\n"
         else:
-            slp = "午睡なし"
+            slp = "\n午睡なし"
+        lines.append(slp)
+
         ts = []
         for t in c["tempratures"]:
-            ts.append("%s℃(%s)" % (t["temprature"], t["temprature_time"]))
-        temp = "\n".join(ts)
+            ts.append(indent + "| %s℃(%s)" % (t["temprature"], t["temprature_time"]))
+        if ts:
+            lines.append("\n体温")
+            lines.extend(ts)
 
-        text =  "\n\n" + memo + "\n\n" + c["meal"] + "\n" + mood + "\n" + slp + "\n" + temp + "\n"
-
-        return [text]
+        return lines
 
     def procTimeLineItem(self, item):
         if "kind" in item:
@@ -730,19 +769,21 @@ class Dumpmon(object):
         kind = item["kind"]
         if kind == "2":  # 連絡帳（保護者）
             content = json.loads(item["content"])
-            lines = []
+            lines = ["\n"]
 
             _time = self.itemDateTime(item).strftime("%H:%M")
             title = "保護者連絡 " + _time
             lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
 
+            indent = " " * 4
             mood_ = []
             if "mood_afternoon" in content:
-                mood_.append("夕(%s)" % content["mood_afternoon"])
+                mood_.append(indent + "| 夕(%s)" % content["mood_afternoon"])
             if "mood_morning" in content:
-                mood_.append("朝(%s)" % content["mood_morning"])
+                mood_.append(indent + "| 朝(%s)" % content["mood_morning"])
             if mood_:
-                lines.append(" ".join(["機嫌"] + mood_))
+                lines.append("\n機嫌")
+                lines.extend(mood_)
 
             ev_ = []
             if "evacuation_evening" in content:
@@ -752,21 +793,28 @@ class Dumpmon(object):
             if ev_:
                 lines.append(" ".join(["排便"] + ev_))
 
+            def toBlock(txt):
+                for line in txt.split("\n"):
+                    yield indent + line
             meal_ = []
             if "meal_evening" in content:
-                meal_.append("夕食: \n    " + content["meal_evening"] + "\n")
+                meal_.append("\n夕食")
+                meal_.extend(toBlock(content["meal_evening"]))
             if "meal_morning" in content:
-                meal_.append("朝食: \n    " + content["meal_morning"] + "\n")
+                meal_.append("\n朝食")
+                meal_.extend(toBlock(content["meal_morning"]))
             if meal_:
-                lines.append("\n".join(["食事"] + meal_))
+                lines.extend(meal_)
 
             if "temprature" in content:
-                lines.append("検温: %(temprature_time)s %(temprature)s ℃" % content)
+                lines.append("\n検温")
+                lines.append(indent + "%(temprature_time)s %(temprature)s ℃" % content)
 
             if "memo" in content:
+                lines.append("\n")
                 memo = content["memo"]
-                memo.replace("\n", "\n\n")
-                lines.append("%(memo)s" % {"memo": memo})
+                for line in memo.split("\n"):
+                    lines.append("| %s" % line)
             return lines
 
         raise RuntimeError("unknown kind: %r" % item)
@@ -823,6 +871,7 @@ def dictmerge(d1, d2):
 
 def width(txt: str):
     return sum(2 if unicodedata.east_asian_width(x) in 'FWA' else 1 for x in txt)
+
 
 def main():
     """
