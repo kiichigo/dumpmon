@@ -65,7 +65,7 @@ class Dumpmon(object):
             os.makedirs(_DUMPDIR)
         if not p.isdir(_OUTPUTDIR):
             os.makedirs(_OUTPUTDIR)
-
+        
     # --- Config
 
     def loadConf(self):
@@ -305,7 +305,7 @@ class Dumpmon(object):
 
                 txt_fn = fn_head + ".txt"
                 with open(p.join(fdr, txt_fn), 'w', encoding="utf-8") as f:
-                    f.write(self.makeNote_simpleContent(item))
+                    f.write("\n".join(self.makeNote_simpleContent(item)))
 
     # --- handout
 
@@ -513,7 +513,6 @@ class Dumpmon(object):
                     start = date.today()
             if end is None:
                 end = date.fromisoformat(o_date)
-            print("o: %r, c: %r" % (o_date, c_date))
             fmt = (
                 "https://ps-api.codmon.com/api/v2/parent/contact_responses/"
                 "?member_id=%(member_id)s"
@@ -565,7 +564,7 @@ class Dumpmon(object):
                 if self.dateRangeTest(item) == 0:
                     yield item
 
-    def iterDumpedTemparture(self):
+    def iterDumpedTemparture(self, service_id=None):
         srvs = self.getServices()
         for sid in srvs.keys():
             if service_id and sid != service_id:
@@ -651,60 +650,13 @@ class Dumpmon(object):
     def makeNote_simpleContent(self, item):
         lines = ["\n"]
 
-        def htmlTableToRstListTable(txt):
-            def procTable(m):
-                txt = m.group(1)
-                rows = []
-                for tr in re.finditer(r"<tr.*?>(.*?)</tr>", txt):
-                    row = tr.group(1)
-                    cols = []
-                    for td in re.finditer(r"<td.*?>(.*?)</td>", row):
-                        col = td.group(1)
-                        col = re.sub(r"<.*?>", " ", col, flags=re.MULTILINE | re.DOTALL)
-                        cols.append(col)
-                    rows.append(cols)
-                maxcol = max([len(x) for x in rows])
-                indent = " " * 4
-                lines = ["\n"]
-                lines.append(".. list-table::\n")
-                for row in rows:
-                    for i, col in enumerate(row):
-                        line = indent + "%s %s %s" % ("*" if i == 0 else " ", "-", col)
-                        lines.append(line)
-                    for dummy in range(len(row), maxcol):
-                        line = indent + " - "
-                        lines.append(line)
-                lines = ["TABLEMARK" + x for x in lines]
-                return "\n".join(lines) + "\n"
-            return re.sub(r"<table.*?>(.*?)</table>", procTable, txt)
-
-        def procContent(content):
-            content = htmlTableToRstListTable(content)
-            # HTMLの一部タグを改行にする
-            content = re.sub(r"<br>", "\n", content, flags=re.MULTILINE)
-            content = re.sub(r"</(h\d|p)>", "\n", content, flags=re.MULTILINE)
-            # その他タグを削除する。
-            content = re.sub(r"<.*?>", " ", content, flags=re.MULTILINE | re.DOTALL)
-            content = re.sub(r"&nbsp;", " ", content, flags=re.MULTILINE)
-            # 3個以上の連続した空白文字を3個にする
-            # content = re.sub(r"[\t 　]{3,}", " ", content)
-            # 3個以上の連続した改行を2個にする
-            content = re.sub(r"\n{3,}", "\n\n", content, flags=re.MULTILINE)
-            content = re.sub(r"^[ 　]+", "", content, flags=re.MULTILINE)
-
-            def wrapJoin(m):
-                line = m.group(1)
-                return "\n".join(textwrap.wrap(line, width=30))
-            content = re.sub(r"^(.*?)$", wrapJoin, content)
-            content = re.sub(r"^TABLEMARK(.*?)$", r"\1", content, flags=re.MULTILINE)
-            return content
 
         _time = self.itemDateTime(item).strftime("%H:%M")
         title = item["title"] + " " + _time
         lines.append(title)
         lines.append("-" * width(title))
 
-        lines.append(procContent(item["content"]))
+        lines.append(htmlToRst(item["content"]))
         return lines
 
     def makeNote_renraku(self, item):
@@ -905,6 +857,59 @@ def width(txt: str):
     return sum(2 if unicodedata.east_asian_width(x) in 'FWA' else 1 for x in txt)
 
 
+def removeTag(txt):
+    return re.sub(r"<.*?>", " ", txt, flags=re.MULTILINE | re.DOTALL)
+
+def htmlTableToRstListTable(txt):
+    def procTable(m):
+        # tableタグのマッチを rstのlist-tableへと変換する
+        txt = m.group(1)
+        rows = []
+        for tr in re.finditer(r"<tr.*?>(.*?)</tr>", txt):
+            row = tr.group(1)
+            cols = []
+            for td in re.finditer(r"<td.*?>(.*?)</td>", row):
+                col = td.group(1)
+                col = removeTag(col)
+                cols.append(col)
+            rows.append(cols)
+        maxcol = max([len(x) for x in rows])
+        indent = " " * 4
+        lines = ["\n"]
+        lines.append(".. list-table::\n")
+        for row in rows:
+            for i, col in enumerate(row):
+                line = indent + "%s %s %s" % ("*" if i == 0 else " ", "-", col)
+                lines.append(line)
+            for dummy in range(len(row), maxcol):
+                line = indent + " - "
+                lines.append(line)
+        lines = ["TABLEMARK" + x for x in lines]
+        return "\n".join(lines) + "\n"
+    return re.sub(r"<table.*?>(.*?)</table>", procTable, txt)
+
+def htmlToRst(txt):
+    content = htmlTableToRstListTable(txt)
+    # HTMLの一部タグを改行にする
+    content = re.sub(r"<br>", "\n", content, flags=re.MULTILINE)
+    content = re.sub(r"</(h\d|p)>", "\n", content, flags=re.MULTILINE)
+    # その他タグを削除する。
+    content = re.sub(r"<.*?>", " ", content, flags=re.MULTILINE | re.DOTALL)
+    content = re.sub(r"&nbsp;", " ", content, flags=re.MULTILINE)
+    # 3個以上の連続した空白文字を3個にする
+    # content = re.sub(r"[\t 　]{3,}", " ", content)
+    # 3個以上の連続した改行を2個にする
+    content = re.sub(r"\n{3,}", "\n\n", content, flags=re.MULTILINE)
+    content = re.sub(r"^[ 　]+", "", content, flags=re.MULTILINE)
+
+    def wrapJoin(m):
+        line = m.group(1)
+        return "\n".join(textwrap.wrap(line, width=30))
+    content = re.sub(r"^(.*?)$", wrapJoin, content)
+    content = re.sub(r"^TABLEMARK(.*?)$", r"\1", content, flags=re.MULTILINE)
+    return content
+
+
 def main():
     """
     コドモンにログインして閲覧できる情報をダウンロードする
@@ -932,6 +937,8 @@ def main():
     if args.verbosity:
         print("verbosity turned on")
         logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
     if args.day:
         s_date = date.today()
         e_date = s_date - timedelta(args.day)
