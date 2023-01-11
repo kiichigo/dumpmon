@@ -159,11 +159,6 @@ class Dumpmon(object):
             return self.services_cache
         url = _API_URL + "/services"
         resj = self.getJson(url)
-        # res = self.session.get(url)
-        # if res.status_code != 200:
-        #     raise RuntimeError("%r" % res)
-        # resj = res.json()
-        # assert resj["success"]
         self.services_cache = resj["data"]
         return resj["data"]
 
@@ -263,8 +258,7 @@ class Dumpmon(object):
             tl_fdr = p.join(_DUMPDIR, srvs[sid]["name"], "timeline")
             for fn in os.listdir(tl_fdr):
                 item = self.loadjson(p.join(tl_fdr, fn))
-                if self.dateRangeTest(item) == 0:
-                    yield item
+                yield item
 
     def downloadTimeline(self):
         log.debug("download")
@@ -280,6 +274,8 @@ class Dumpmon(object):
 
             s_fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
             for item in self.iterDumpedTimeline(service_id=sid):
+                if self.dateRangeTest(item) != 0:
+                    continue
                 if "file_url" not in item or item["file_url"] is None:
                     continue
                 item_displaydate = date.fromisoformat(item["display_date"])
@@ -495,8 +491,7 @@ class Dumpmon(object):
             fdr = p.join(_DUMPDIR, srvs[sid]["name"], "comments")
             for fn in os.listdir(fdr):
                 item = self.loadjson(p.join(fdr, fn))
-                if self.dateRangeTest(item) == 0:
-                    yield item
+                yield item
 
     # --- contact_responses
 
@@ -561,8 +556,7 @@ class Dumpmon(object):
             fdr = p.join(_DUMPDIR, srvs[sid]["name"], "contact_responses")
             for fn in os.listdir(fdr):
                 item = self.loadjson(p.join(fdr, fn))
-                if self.dateRangeTest(item) == 0:
-                    yield item
+                yield item
 
     def iterDumpedTemparture(self, service_id=None):
         srvs = self.getServices()
