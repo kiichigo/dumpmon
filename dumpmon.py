@@ -6,7 +6,7 @@ u"""
 """
 
 import argparse
-from datetime import date, datetime, timedelta
+from datetime import date, time, datetime, timedelta
 import getpass
 import json
 import logging
@@ -351,6 +351,7 @@ class Dumpmon(object):
                 yield handout
 
     def iterHandouts(self):
+        """ handouts(資料室) のリストを順に得る 範囲はself.s_date, self.e_dateの範囲 """
         for item in self.iterHandsoutsPage():
             hid = item["handoutId"]
             result = self.dateRangeTest(item)
@@ -368,6 +369,7 @@ class Dumpmon(object):
         return fdr
 
     def dumpHandouts(self):
+        """ handouts(資料室) のリストを順に保存する 範囲はself.s_date, self.e_dateの範囲 """
         fdr = self.handoutDumpFolder()
         for item in self.iterHandouts():
             isodt = item["publishFromDateTime"]
@@ -377,7 +379,7 @@ class Dumpmon(object):
             self.dumpjson(fn, item)
 
     def iterDumpedHandouts(self):
-        u""" start date, end dateの範囲内のダンプ済みhandoutを返す 順不同"""
+        u""" ダンプ済みhandoutを返す 範囲はself.s_date, self.e_dateの範囲 順不同"""
         fdr = self.handoutDumpFolder()
         for fn in os.listdir(fdr):
             item = self.loadjson(p.join(fdr, fn))
@@ -406,7 +408,6 @@ class Dumpmon(object):
 
     def downloadAllHandout(self):
         u""" start date, end dateの範囲内のhandoutをダウンロードする """
-
         for item in self.iterDumpedHandouts():
             self.downloadHandout(item)
 
@@ -577,6 +578,25 @@ class Dumpmon(object):
                 if self.dateRangeTest(item) == 0:
                     yield item
 
+    def iterDumpedTemparture(self):
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            if service_id and sid != service_id:
+                continue
+            for item in self.iterDumpedTimeline(service_id=sid):
+                if "content" not in item:
+                    continue
+                try:
+                    content = json.loads(item["content"])
+                except json.JSONDecodeError:
+                    continue
+                if "tempratures" in content:
+                    for tempitem in content["tempratures"]:
+                        itemdate = date.fromisoformat(item["display_date"])
+                        temptime = time.fromisoformat(tempitem["temprature_time"])
+                        tempdatetime = datetime.combine(itemdate, temptime)
+                        yield (tempdatetime, tempitem["temprature"])
+
     # --- communication notebook
 
     def makenote(self):
@@ -702,10 +722,16 @@ class Dumpmon(object):
 
     def makeNote_renraku(self, item):
         assert item["kind"] == "4"
+        indent = " " * 4
+
         c = json.loads(item["content"])
         memo = re.sub(r"<.*?>", "\n", c["memo"])
         lines = ["\n"]
 
+        lines.append("\n..\n\n")
+        for line in json.dumps(c, indent=4, ensure_ascii=False).split("\n"):
+            lines.append(indent + ".. " + line)
+        lines.append("\n")
         _time = self.itemDateTime(item).strftime("%H:%M")
         title = "\n連絡帳 " + _time
         lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
@@ -715,7 +741,6 @@ class Dumpmon(object):
             lines.extend(wrappedLines)
             lines.append("\n")
         memo = "\n".join(lines)
-        indent = " " * 4
         mood_ = []
         if "mood_morning" in c:
             mood_.append(indent + "| 朝(%s)" % c["mood_morning"])
@@ -726,14 +751,15 @@ class Dumpmon(object):
             lines.extend(mood_)
 
         if "sleepings" in c and c["sleepings"]:
-            slp = "\n午睡" + "\n" + indent + "| " + c["sleepings"] + "\n"
+            lines.append("\n午睡")
+            lines.extend([indent + "| " + x for x in c["sleepings"].split("\n")])
         else:
-            slp = "\n午睡なし"
-        lines.append(slp)
+            lines.append("\n午睡なし")
 
         ts = []
         for t in c["tempratures"]:
-            ts.append(indent + "| %s℃(%s)" % (t["temprature"], t["temprature_time"]))
+            _time = time.fromisoformat(t["temprature_time"])
+            ts.append(indent + "| %s℃ (%s)" % (t["temprature"], _time.strftime("%H:%M")))
         if ts:
             lines.append("\n体温")
             lines.extend(ts)
@@ -791,11 +817,11 @@ class Dumpmon(object):
             if "evacuation_morning" in content:
                 ev_.append("朝 (%s) " % content["evacuation_morning"])
             if ev_:
-                lines.append(" ".join(["排便"] + ev_))
+                lines.append("\n" + " ".join(["排便"] + ev_))
 
             def toBlock(txt):
                 for line in txt.split("\n"):
-                    yield indent + line
+                    yield indent + "| " + line
             meal_ = []
             if "meal_evening" in content:
                 meal_.append("\n夕食")
