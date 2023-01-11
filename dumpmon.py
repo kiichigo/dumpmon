@@ -29,24 +29,7 @@ import unicodedata
 log = logging.getLogger()
 
 
-def get_appdatadir() -> pathlib.Path:
-    """
-    Returns a parent directory path
-    where persistent application data can be stored.
 
-    # linux: ~/.local/share
-    # macOS: ~/Library/Application Support
-    # windows: C:/Users/<USER>/AppData/Roaming
-    """
-
-    home = pathlib.Path.home()
-
-    if sys.platform == "win32":
-        return home / "AppData/Roaming"
-    elif sys.platform == "linux":
-        return home / ".local/share"
-    elif sys.platform == "darwin":
-        return home / "Library/Application Support"
 
 
 _THISDIR = p.dirname(__file__)
@@ -867,6 +850,25 @@ class Dumpmon(object):
 
 # --- util
 
+def get_appdatadir() -> pathlib.Path:
+    """
+    Returns a parent directory path
+    where persistent application data can be stored.
+
+    # linux: ~/.local/share
+    # macOS: ~/Library/Application Support
+    # windows: C:/Users/<USER>/AppData/Roaming
+    """
+
+    home = pathlib.Path.home()
+
+    if sys.platform == "win32":
+        return home / "AppData/Roaming"
+    elif sys.platform == "linux":
+        return home / ".local/share"
+    elif sys.platform == "darwin":
+        return home / "Library/Application Support"
+        
 def drange(s: date, e: date, includeEndDate: bool = True) -> list:
     """Get a day-by-day date list from start date to end date
 
