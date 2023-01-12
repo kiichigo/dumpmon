@@ -28,10 +28,6 @@ import unicodedata
 
 log = logging.getLogger()
 
-
-
-
-
 _THISDIR = p.dirname(__file__)
 
 _DATA = p.expanduser("~/Desktop/dumpmon")
@@ -65,7 +61,7 @@ class Dumpmon(object):
             os.makedirs(_DUMPDIR)
         if not p.isdir(_OUTPUTDIR):
             os.makedirs(_OUTPUTDIR)
-        
+
     # --- Config
 
     def loadConf(self):
@@ -162,7 +158,7 @@ class Dumpmon(object):
         self.services_cache = resj["data"]
         return resj["data"]
 
-    def dumpServices(self):
+    def fetchServices(self):
         fn = p.join(_DUMPDIR, "services.json")
         self.dumpjson(fn, self.getServices())
 
@@ -229,7 +225,7 @@ class Dumpmon(object):
                 print("LastPage Detected. Finish: %d" % i)
                 return
 
-    def dumpTimeline(self):
+    def fetchTimeline(self):
         srvs = self.getServices()
         for service_id in srvs.keys():
             tl_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "timeline")
@@ -351,7 +347,7 @@ class Dumpmon(object):
             os.makedirs(fdr)
         return fdr
 
-    def dumpHandouts(self):
+    def fetchHandouts(self):
         """ handouts(資料室) のリストを順に保存する 範囲はself.s_date, self.e_dateの範囲 """
         fdr = self.handoutDumpFolder()
         for item in self.iterHandouts():
@@ -406,7 +402,7 @@ class Dumpmon(object):
         self.children_cache = resj
         return resj
 
-    def dumpChildren(self):
+    def fetchChildren(self):
         fn = p.join(_DUMPDIR, 'children.json')
         self.dumpjson(fn, self.getChildren())
 
@@ -472,7 +468,7 @@ class Dumpmon(object):
                     elif result == -1:
                         return
 
-    def dumpComments(self):
+    def fetchComments(self):
         srvs = self.getServices()
         for service_id in srvs.keys():
             cmt_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "comments")
@@ -535,7 +531,7 @@ class Dumpmon(object):
                     elif result == -1:
                         return
 
-    def dumpContactResponses(self, service_id=None):
+    def fetchContactResponses(self, service_id=None):
         srvs = self.getServices()
         for sid in srvs.keys():
             if service_id and sid != service_id:
@@ -643,7 +639,6 @@ class Dumpmon(object):
 
     def makeNote_simpleContent(self, item):
         lines = ["\n"]
-
 
         _time = self.itemDateTime(item).strftime("%H:%M")
         title = item["title"] + " " + _time
@@ -814,7 +809,8 @@ def get_appdatadir() -> pathlib.Path:
         return home / ".local/share"
     elif sys.platform == "darwin":
         return home / "Library/Application Support"
-        
+
+
 def drange(s: date, e: date, includeEndDate: bool = True) -> list:
     """Get a day-by-day date list from start date to end date
 
@@ -854,6 +850,7 @@ def width(txt: str):
 def removeTag(txt):
     return re.sub(r"<.*?>", " ", txt, flags=re.MULTILINE | re.DOTALL)
 
+
 def htmlTableToRstListTable(txt):
     def procTable(m):
         # tableタグのマッチを rstのlist-tableへと変換する
@@ -881,6 +878,7 @@ def htmlTableToRstListTable(txt):
         lines = ["TABLEMARK" + x for x in lines]
         return "\n".join(lines) + "\n"
     return re.sub(r"<table.*?>(.*?)</table>", procTable, txt)
+
 
 def htmlToRst(txt):
     content = htmlTableToRstListTable(txt)
@@ -956,15 +954,15 @@ def main():
         while (not c.testLogin()):
             c.login(useSavedId=False)
     c.saveCookie()
-    c.dumpServices()
-    c.dumpChildren()
+    c.fetchServices()
+    c.fetchChildren()
 
-    # dump json
+    # fetch json
     if allExecute or args.fetch:
-        c.dumpTimeline()
-        c.dumpComments()
-        c.dumpContactResponses()
-        c.dumpHandouts()
+        c.fetchTimeline()
+        c.fetchComments()
+        c.fetchContactResponses()
+        c.fetchHandouts()
 
     # download attach file
     if allExecute or args.download:
