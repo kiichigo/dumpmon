@@ -37,6 +37,41 @@ _OUTPUTDIR = p.join(_DATA, "output")
 _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
 
+_DEFAULT_CONFIG = {
+}
+
+class Config(object):
+
+    def __init__(self):
+        self.appdatadir = get_appdatadir() / "dumpmon"
+        self.fn = p.join(self.appdatadir, "config.json")
+        self.conf = _DEFAULT_CONFIG
+        self.load()
+
+    def load(self):
+        if p.isfile(self.fn):
+            self.conf = json.load(open(self.fn, 'r'))
+        else:
+            self.conf = _DEFAULT_CONFIG
+    
+    def save(self):
+        json.dump(self.conf, open(self.fn, 'w'))
+
+    def __enter__(self):
+        self.load()
+        return self.data()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.save()        
+        return
+
+    def data(self):
+        return self.conf
+
+    def clean(self):
+        if p.isfile(self.fn):
+            os.remove(self.fn)
+
 
 class Dumpmon(object):
 
@@ -61,7 +96,7 @@ class Dumpmon(object):
             os.makedirs(_DUMPDIR)
         if not p.isdir(_OUTPUTDIR):
             os.makedirs(_OUTPUTDIR)
-
+        
     # --- Config
 
     def loadConf(self):
@@ -90,13 +125,13 @@ class Dumpmon(object):
     def login(self, useSavedId=True):
         if self.testLogin():
             return
-        conf = self.loadConf()
-        if useSavedId and "id" in conf:
+        conf = Config()
+        if useSavedId and "id" in conf.date():
             id = conf["id"]
         else:
             id = input("login: ")
-            conf["id"] = id
-            self.saveConf(conf)
+            with Config() as data:
+                data()["id"] = id
         pw = getpass.getpass("password: ")
         loginPayload = {"login_id": id, "login_password": pw}
         res = self.session.post(_API_URL + "/login?__env__=myapp", data=loginPayload)
@@ -929,6 +964,7 @@ def main():
     if args.verbosity:
         print("verbosity turned on")
         logging.basicConfig(level=logging.DEBUG)
+        log.debug("conf: %r" % Config().data())
     else:
         logging.basicConfig(level=logging.INFO)
     if args.day:
@@ -942,7 +978,13 @@ def main():
         e_date = None
     else:
         s_date = date.today()
-        e_date = s_date - timedelta(7)
+        with Config() as conf:
+            if "lastFetchedDate" in conf:
+                log.debug("last fetch date...")
+                e_date = date.fromisoformat(conf["lastFetchedDate"])
+            else:
+                log.debug("fetch last 3 day...")
+                e_date = s_date - timedelta(3)
 
     partialExecutionEnabled = args.fetch or args.download or args.makenote
     allExecute = not partialExecutionEnabled
@@ -966,11 +1008,19 @@ def main():
 
     # download attach file
     if allExecute or args.download:
+        log.info("download...")
         c.downloadTimeline()
         c.downloadAllHandout()
+    
+    if allExecute:
+        log.info("save last fetch date...")
+        with Config() as conf:
+            conf["lastFetchedDate"] = s_date.isoformat()
+        print(conf["lastFetchedDate"])
 
     # meke communication notebook
     if allExecute or args.makenote:
+        log.info("makenote...")
         c.makenote()
 
 
