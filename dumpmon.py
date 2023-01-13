@@ -940,23 +940,29 @@ def htmlToRst(txt):
 def main():
     """
     コドモンにログインして閲覧できる情報をダウンロードする
-    オプションを指定しないと、直近７日間のデータを取得します。
+    オプションを指定しないと、最後に実行した日までのデータを取得します。
 
     """
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Fetches and dumps codmon data.")
 
-    parser.add_argument("-f", "--fetch", help="fetch json", action="store_true")
-    parser.add_argument("-dl", "--download", help="download attachment file", action="store_true")
-    parser.add_argument("-m", "--makenote", help="make communication notebook", action="store_true")
+    phase = parser.add_argument_group(title="phase", description="Limit the execution phase")
+    phase.add_argument("-f", "--fetch", help="fetch json", action="store_true")
+    phase.add_argument("-dl", "--download", help="download attachment file", action="store_true")
+    phase.add_argument("-m", "--makenote", help="make communication notebook", action="store_true")
 
-    group = parser.add_mutually_exclusive_group()
+    daterange = parser.add_argument_group(title="daterange", description="Fetch Date Range")
+    group = daterange.add_mutually_exclusive_group()
     group.add_argument(
-        "-a", "--all", action="store_true")
+        "-a", "--all", action="store_true",
+        help="Retrieve all data up to the present day")
     group.add_argument(
-        "-d", "--day", type=int)
+        "-d", "--day", type=int,
+        help="Retrieve data for a specified number of days up to today")
     group.add_argument(
         "-r", "--range", type=date.fromisoformat,
-        nargs=2, metavar=("YYYY-MM-DD", "YYYY-MM-DD"))
+        nargs=2, metavar=("YYYY-MM-DD", "YYYY-MM-DD"),
+        help="Obtain data for a specified date range")
+
     parser.add_argument("-v", "--verbosity", help="increase output verbosity", action="store_true")
 
     args = parser.parse_args()

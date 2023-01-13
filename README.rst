@@ -30,3 +30,30 @@ Pythonでスクリプトを実行できる知識が必要です。
 
 python dumpmon.py
 
+オプション
+-----------
+
+::
+
+    usage: dumpmon.py [-h] [-f] [-dl] [-m] [-a | -d DAY | -r YYYY-MM-DD YYYY-MM-DD] [-v]
+
+    Fetches and dumps codmon data.
+
+    options:
+    -h, --help            show this help message and exit
+    -v, --verbosity       increase output verbosity
+
+    phase:
+    Limit the execution phase
+
+    -f, --fetch           fetch json
+    -dl, --download       download attachment file
+    -m, --makenote        make communication notebook
+
+    daterange:
+    Fetch Date Range
+
+    -a, --all             Retrieve all data up to the present day
+    -d DAY, --day DAY     Retrieve data for a specified number of days up to today
+    -r YYYY-MM-DD YYYY-MM-DD, --range YYYY-MM-DD YYYY-MM-DD
+                            Obtain data for a specified date range
