@@ -40,6 +40,7 @@ _API_URL = _TOP_URL + "/api/v2/parent"
 _DEFAULT_CONFIG = {
 }
 
+
 class Config(object):
 
     def __init__(self):
@@ -671,6 +672,58 @@ class Dumpmon(object):
                 with open(p.join(fdr, fn), 'w', encoding="utf-8") as f:
                     txt = "\n".join(allLines[sid][yyyymm])
                     f.write(txt)
+    
+    def make_index(self):
+        toc_lines = []
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            sname = srvs[sid]["name"]
+            fdr = p.join(_OUTPUTDIR, sname)
+            for fn in os.listdir(fdr):
+                if fn.endswith(" note.rst"):
+                    toc_lines.append("    %s/%s\n" % (sname, fn[:-4]))
+
+        tochead = (
+            ".. toctree::\n"
+            "    :maxdepth: 1\n"
+            "    :caption: Contents:\n\n"
+        )
+
+        lines = []
+        index_file = p.join(_OUTPUTDIR, 'index.rst')
+        if p.isfile(index_file):
+            bInTocTree = False
+            bEmptyLine = False
+            bEmptyLine2 = False
+            for line in open(index_file, 'r', encoding="utf-8").readlines():
+                if bInTocTree is False:
+                    m = re.match(r'\.\. toctree::', line)
+                    if m:
+                        bInTocTree = True
+                    lines.append(line)
+                elif bEmptyLine is False:
+                    m = re.match(r'^\s*$', line)
+                    if m:
+                        bEmptyLine = True
+                    lines.append(line)
+                elif bEmptyLine2 is False:
+                    m = re.match(r'^\s*$', line)
+                    if m:
+                        bEmptyLine2 = True
+                        lines.extend(toc_lines)
+                        lines.append(line)
+                else:
+                    lines.append(line)
+            if bEmptyLine is False:
+                lines.append(tochead)
+            if bEmptyLine2 is False:
+                lines.extend(toc_lines)
+        else:
+            lines.append(tochead)
+            lines.extend(toc_lines)
+        with open(index_file, 'w', encoding="utf-8") as f:
+            f.writelines(lines)
+
 
     def makeNote_simpleContent(self, item):
         lines = ["\n"]
