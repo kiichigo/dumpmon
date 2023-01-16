@@ -44,4 +44,4 @@ jobs:
 
     - name: Build html
       run: |
-        cd docs && make html
+        cd doc && make html
