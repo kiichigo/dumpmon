@@ -26,7 +26,7 @@ from time import sleep
 import urllib
 import unicodedata
 
-log = logging.getLogger()
+log = logging.getLogger("dumpmon")
 
 _THISDIR = p.dirname(__file__)
 
@@ -56,7 +56,7 @@ class Config(object):
             self.conf = _DEFAULT_CONFIG
     
     def save(self):
-        json.dump(self.conf, open(self.fn, 'w'))
+        json.dump(self.conf, open(self.fn, 'w'), indent=2)
 
     def __enter__(self):
         self.load()
@@ -153,7 +153,7 @@ class Dumpmon(object):
 
     def get(self, url, headers=None):
         u""" HTTP GET for Codmon session"""
-        log.info(url)
+        log.debug("get: %s" % url)
         defaultHaeders = {
             'User-Agent': 'dumpmon',
         }
@@ -996,7 +996,10 @@ def main():
     オプションを指定しないと、最後に実行した日までのデータを取得します。
 
     """
-    parser = argparse.ArgumentParser(description="Fetches and dumps codmon data.")
+    parser = argparse.ArgumentParser(
+        description="Fetches and dumps codmon data.",
+        epilog="Login ID and cookies are stored here: %s" % Dumpmon().appdatadir,
+        )
 
     phase = parser.add_argument_group(title="phase", description="Limit the execution phase")
     phase.add_argument("-f", "--fetch", help="fetch json", action="store_true")
@@ -1017,15 +1020,24 @@ def main():
         help="Obtain data for a specified date range")
 
     parser.add_argument("-v", "--verbosity", help="increase output verbosity", action="store_true")
+    parser.add_argument("-q", "--quiet", help="quietly", action="store_true")
 
     args = parser.parse_args()
 
+    # --- log level
+
+    logging.basicConfig()
     if args.verbosity:
         print("verbosity turned on")
-        logging.basicConfig(level=logging.DEBUG)
-        log.debug("conf: %r" % Config().data())
+        # rootロガーのレベルをDEBUGにする。requestsなどのログも出ます。
+        logging.getLogger().setLevel(logging.DEBUG)
     else:
-        logging.basicConfig(level=logging.INFO)
+        log.setLevel(level=logging.INFO)
+    if args.quiet:
+        log.setLevel(level=logging.WARNING)
+
+    # --- date range
+
     if args.day:
         s_date = date.today()
         e_date = s_date - timedelta(args.day)
@@ -1039,14 +1051,18 @@ def main():
         s_date = date.today()
         with Config() as conf:
             if "lastFetchedDate" in conf:
-                log.debug("last fetch date...")
                 e_date = date.fromisoformat(conf["lastFetchedDate"])
             else:
-                log.debug("fetch last 3 day...")
                 e_date = s_date - timedelta(3)
+            log.info("Fetches data up to the following dates: %s" % e_date.isoformat())
+
+    # --- phase select
 
     partialExecutionEnabled = args.fetch or args.download or args.makenote
     allExecute = not partialExecutionEnabled
+
+
+    # -- login
 
     log.debug("debug")
     c = Dumpmon(start_date=s_date, end_date=e_date)
@@ -1058,26 +1074,32 @@ def main():
     c.fetchServices()
     c.fetchChildren()
 
-    # fetch json
+    # --- fetch phase
+
     if allExecute or args.fetch:
+        log.info("fetchTimeline...")
         c.fetchTimeline()
+        log.info("fetchComments...")
         c.fetchComments()
+        log.info("fetchContactResponses...")
         c.fetchContactResponses()
+        log.info("fetchHandouts...")
         c.fetchHandouts()
 
-    # download attach file
+    # --- download attach file phase
+
     if allExecute or args.download:
         log.info("download...")
         c.downloadTimeline()
         c.downloadAllHandout()
     
     if allExecute:
-        log.info("save last fetch date...")
         with Config() as conf:
             conf["lastFetchedDate"] = s_date.isoformat()
-        print(conf["lastFetchedDate"])
+        log.info("save last fetch date: %s" % conf["lastFetchedDate"])
 
-    # meke communication notebook
+    # --- meke communication notebook phase
+
     if allExecute or args.makenote:
         log.info("makenote...")
         c.makenote()
