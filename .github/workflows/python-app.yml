@@ -8,6 +8,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -37,3 +38,10 @@ jobs:
     # - name: Test with pytest
     #   run: |
     #     pytest
+    - name: Install sphinx
+      run: |
+        pip install -U sphinx
+
+    - name: Build html
+      run: |
+        cd docs && make html
