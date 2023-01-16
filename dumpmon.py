@@ -12,6 +12,7 @@ Codmonの仕様を網羅しているわけではありません。
 import argparse
 from datetime import date, time, datetime, timedelta
 import getpass
+import gettext
 import json
 import logging
 import os
@@ -184,19 +185,32 @@ class Dumpmon(object):
     # --- fetch services list
 
     def getServices(self):
-        u"""
-        https://ps-api.codmon.com/api/v2/parent/services/?use_image_edge=true&__env__=myapp
+        """ codmonのservicesをキャッシュ、ファイル、サーバーから取得の順に返します。
+
+        Returns:
+            dict: servises jsonのdata
         """
+        # https://ps-api.codmon.com/api/v2/parent/services/?use_image_edge=true&__env__=myapp
         if self.services_cache is not None:
             return self.services_cache
-        url = _API_URL + "/services"
-        resj = self.getJson(url)
-        self.services_cache = resj["data"]
-        return resj["data"]
+        fn = p.join(_DUMPDIR, "services.json")
+        if p.isfile(fn):
+            self.services_cache = self.loadjson(fn)
+        else:
+            self.services_cache = self.fetchServices()
+        return self.services_cache
 
     def fetchServices(self):
+        """ codmonのservicesをサーバーから取得して保存します。
+
+        Returns:
+            dict: servises jsonのdata
+        """
         fn = p.join(_DUMPDIR, "services.json")
-        self.dumpjson(fn, self.getServices())
+        url = _API_URL + "/services"
+        resj = self.getJson(url)
+        self.dumpjson(fn, resj["data"])
+        return resj["data"]
 
     # --- filter util date range
 
@@ -996,7 +1010,9 @@ def main():
     オプションを指定しないと、最後に実行した日までのデータを取得します。
 
     """
-    parser = argparse.ArgumentParser(description="Fetches and dumps codmon data.")
+    parser = argparse.ArgumentParser(
+        description="Fetches and dumps codmon data.",
+        epilog="appdata: %s" % Dumpmon().appdatadir)
 
     phase = parser.add_argument_group(title="phase", description="Limit the execution phase")
     phase.add_argument("-f", "--fetch", help="fetch json", action="store_true")
