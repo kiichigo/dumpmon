@@ -26,9 +26,14 @@ Dumpmon
 使い方
 ------
 
-Pythonでスクリプトを実行できる知識が必要です。
+| python dumpmon.py
+| 
+| ~/Desktop/dumomon に保存されます。
+| 
+| dumpmon/dump/ には、サーバーから取得した生のデータが保存されます。
+| dumpmon/output/ には、連絡帳と添付ファイルが人月ごとにまとめられて、rst形式で保存されます。
 
-python dumpmon.py
+
 
 オプション
 -----------
@@ -57,3 +62,4 @@ python dumpmon.py
     -d DAY, --day DAY     Retrieve data for a specified number of days up to today
     -r YYYY-MM-DD YYYY-MM-DD, --range YYYY-MM-DD YYYY-MM-DD
                             Obtain data for a specified date range
+
