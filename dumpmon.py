@@ -39,6 +39,11 @@ _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
 
 _DEFAULT_CONFIG = {
+    # Codmon Login Id
+    "id": None,
+    "lastFetchedDate": None,
+    "dumpdir": None,
+    "outputdir": None,
 }
 
 
@@ -99,22 +104,6 @@ class Dumpmon(object):
         if not p.isdir(_OUTPUTDIR):
             os.makedirs(_OUTPUTDIR)
         
-    # --- Config
-
-    def loadConf(self):
-        fn = p.join(self.appdatadir, "config.json")
-        if p.isfile(fn):
-            conf = self.loadjson(fn)
-        else:
-            conf = {}
-        return conf
-
-    def saveConf(self, conf):
-        fn = p.join(self.appdatadir, "config.json")
-        with open(fn, "w") as f:
-            json.dump(conf, f)
-        assert p.isfile(fn)
-
     # --- Login
 
     def testLogin(self):
@@ -128,8 +117,8 @@ class Dumpmon(object):
         if self.testLogin():
             return
         conf = Config()
-        if useSavedId and "id" in conf.date():
-            id = conf["id"]
+        if useSavedId and "id" in conf.data() and conf.data()["id"]:
+            id = conf.data()["id"]
         else:
             id = input("login: ")
             with Config() as data:
@@ -811,8 +800,8 @@ class Dumpmon(object):
             return self.makeNote_renraku(item)
         elif kind == "6":  # アンケート
             return  # self.makeNote_simpleContent(item)
-        elif kind == "7":
-            pass
+        elif kind == "7":  # お迎え/延長
+            return self.makeNote_simpleContent(item)
         elif kind == "8":  # 遅刻・欠席連絡
             return self.makeNote_simpleContent(item)
         elif kind == "9":  # 都合欠
