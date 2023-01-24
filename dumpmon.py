@@ -128,8 +128,8 @@ class Dumpmon(object):
         if self.testLogin():
             return
         conf = Config()
-        if useSavedId and "id" in conf.date():
-            id = conf["id"]
+        if useSavedId and "id" in conf.data():
+            id = conf.data()["id"]
         else:
             id = input("login: ")
             with Config() as data:
@@ -519,6 +519,8 @@ class Dumpmon(object):
                         return
 
     def fetchComments(self):
+        u""" Comments(保護者からの連絡)を取得して保存する
+        """
         srvs = self.getServices()
         for service_id in srvs.keys():
             cmt_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "comments")
@@ -582,6 +584,11 @@ class Dumpmon(object):
                         return
 
     def fetchContactResponses(self, service_id=None):
+        u"""_ContactResponses(保護者からの遅刻・欠席連絡)を取得して保存する
+
+        Args:
+            service_id (str, optional): サービスを限定したい場合はIDを指定する。 Defaults to None.
+        """
         srvs = self.getServices()
         for sid in srvs.keys():
             if service_id and sid != service_id:
@@ -623,7 +630,25 @@ class Dumpmon(object):
                         tempdatetime = datetime.combine(itemdate, temptime)
                         yield (tempdatetime, tempitem["temprature"])
 
-    # --- communication notebook
+    # --- Attendances
+
+    def fetchAttendances(self):
+        """ 登園時間情報を取得
+        """
+        # https://ps-api.codmon.com/api/v2/parent/attendances/?start_date=2023-01-01&end_date=2023-01-31&__env__=myapp
+        url = _API_URL + "/attendances"
+        fn = p.join(_DUMPDIR, "attendances.json")
+        resj = self.getJson(url)
+        self.dumpjson(fn, resj["data"])
+
+    def loadDumpedAttendances(self):
+        fn = p.join(_DUMPDIR, "attendances.json")
+        atts = self.loadjson(fn)
+        return atts
+
+    # --
+    # --- communication notebook ---
+    # --
 
     def makenote(self):
         itemProcMap = {
@@ -631,6 +656,8 @@ class Dumpmon(object):
             "comment": self.procCommentItem,
             "contactresponse": self.procContactResponseItem
         }
+        self.fetchAttendances()  # debug
+        atts = self.loadDumpedAttendances()
         srvs = self.getServices()
         allLines = {}
         for sid in srvs.keys():
@@ -661,7 +688,7 @@ class Dumpmon(object):
             cur_date = None
             for item_src, item_displaydate, item_datetime, item in items:
                 yyyymm = item_displaydate.strftime("%Y-%m")
-                # header
+                # month header
                 if yyyymm not in allLines[sid]:
                     title = "%s %s" % (srvs[sid]["name"], item_displaydate.strftime("%Y年%m月"))
                     line = "\n%(line)s\n%(title)s\n%(line)s\n" % {"title": title, "line": "=" * width(title)}
@@ -672,6 +699,11 @@ class Dumpmon(object):
                     title = "%s" % item_displaydate.strftime("%m月%d日")
                     line = "\n%s\n%s\n" % (title, "=" * width(title))
                     allLines[sid][yyyymm].append(line)
+                    # 登園時間
+                    attLine = self.make_attendance(atts, cur_date)
+                    if attLine:
+                        allLines[sid][yyyymm].append(attLine)
+
                 itemProcFunc = itemProcMap[item_src]
                 lines = itemProcFunc(item)
                 if lines:
@@ -687,6 +719,22 @@ class Dumpmon(object):
                     txt = "\n".join(allLines[sid][yyyymm])
                     f.write(txt)
     
+    def make_attendance(self, atts, att_date):
+        def find_date(atts, att_date):
+            s_att_date = att_date.isoformat()
+            for att in atts:
+                if att["start_date"] == s_att_date:
+                    return att
+        def toStr(att, key):
+            if key in att and att[key]:
+                t = time.fromisoformat(att[key])
+                return t.strftime("%H:%M")
+            else:
+                return ""
+        att = find_date(atts, att_date)
+        if att:
+            return "%s 〜 %s" % (toStr(att, "start_time"), toStr(att, "end_time"))
+
     def make_index(self):
         toc_lines = []
         srvs = self.getServices()
@@ -811,8 +859,8 @@ class Dumpmon(object):
             return self.makeNote_renraku(item)
         elif kind == "6":  # アンケート
             return  # self.makeNote_simpleContent(item)
-        elif kind == "7":
-            pass
+        elif kind == "7":  # お迎え/延長
+            return self.makeNote_simpleContent(item)
         elif kind == "8":  # 遅刻・欠席連絡
             return self.makeNote_simpleContent(item)
         elif kind == "9":  # 都合欠
@@ -878,17 +926,30 @@ class Dumpmon(object):
     def procContactResponseItem(self, item):
         kind = item["kind"]
         if kind == "3":
-            return self.makeNote_simpleContent(item)
+            pass  # return self.makeNote_simpleContent(item)
         elif kind == "6":  # 遅刻・欠席連絡
-            return self.makeNote_simpleContent(item)
+            pass  # return self.makeNote_simpleContent(item)
         elif kind == "7":  # '
-            return self.makeNote_simpleContent(item)
+            pass  # return self.makeNote_simpleContent(item)
         elif kind == "8":  # 病欠
-            return self.makeNote_simpleContent(item)
+            pass  # return self.makeNote_simpleContent(item)
         elif kind == "9":  # 病欠
-            return self.makeNote_simpleContent(item)
+            pass  # return self.makeNote_simpleContent(item)
+        else:
+            raise RuntimeError("unknown kind: %r" % item)
 
-        raise RuntimeError("unknown kind: %r" % item)
+        cons = item["content"].split("\n")
+        subtitle = cons[0]
+        content = cons[2:]
+
+        lines = ["\n"]
+        _time = self.itemDateTime(item).strftime("%H:%M")
+        title = item["title"] + " " + subtitle + " " + _time
+        lines.append(title)
+        lines.append("-" * width(title))
+        lines.extend(content)
+
+        return lines
 
 
 # --- util
