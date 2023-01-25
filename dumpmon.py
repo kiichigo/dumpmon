@@ -925,7 +925,7 @@ class Dumpmon(object):
         elif kind == "9":  # 病欠
             pass  # return self.makeNote_simpleContent(item)
         else:
-            raise RuntimeError("unknown kind: %r" % item)
+        raise RuntimeError("unknown kind: %r" % item)
 
         cons = item["content"].split("\n")
         subtitle = cons[0]
@@ -1112,13 +1112,14 @@ def main():
         s_date = None
         e_date = None
     else:
-        s_date = date.today()
         with Config() as conf:
             if "lastFetchedDate" in conf:
+                s_date = date.today()
                 e_date = date.fromisoformat(conf["lastFetchedDate"])
+                log.info("Fetches data up to the following dates: %s" % e_date.isoformat())
             else:
-                e_date = s_date - timedelta(3)
-            log.info("Fetches data up to the following dates: %s" % e_date.isoformat())
+                s_date = None
+                e_date = None
 
     # --- phase select
 
