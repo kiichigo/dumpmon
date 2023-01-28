@@ -338,6 +338,73 @@ class Dumpmon(object):
                 with open(p.join(fdr, txt_fn), 'w', encoding="utf-8") as f:
                     f.write("\n".join(self.makeNote_simpleContent(item)))
 
+    def fetchAlbum(self, service_id, album_id):
+        # https://ps-api.codmon.com/api/v2/parent/albums/49193557?perpage=1000&id=49193557&__env__=myapp
+
+        srvs = self.getServices()
+        tl_fdr = p.join(_DUMPDIR, srvs[service_id]["name"], "album")
+        if not p.isdir(tl_fdr):
+            os.makedirs(tl_fdr)
+        fmt = _API_URL + "/albums/%(id)s?perpage=1000&id=%(id)s"
+        url = fmt % {"id": album_id}
+        item = self.getJson(url)["data"]
+        itemname = "%(display_date)s_%(id)s.json" % item
+        fn = p.join(tl_fdr, itemname)
+        self.dumpjson(fn, item)
+        return item
+
+    def downloadTimelinePhoto(self):
+        log.debug("download photo")
+
+        def dlFileExists(fdr_name, fn_head):
+            for fn in os.listdir(fdr_name):
+                if fn.startswith(fn_head):
+                    return True
+
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            log.debug("service: %s" % sid)
+
+            s_fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
+            for item in self.iterDumpedTimeline(service_id=sid):
+                if self.dateRangeTest(item) != 0:
+                    continue
+                if "photos" not in item or item["photos"] is None:
+                    continue
+
+                item_displaydate = date.fromisoformat(item["display_date"])
+                fdr_name = "%(YYYY-MM-DD)s photos" % {"YYYY-MM-DD": item_displaydate.isoformat()}
+                log.debug("fdr_name: %s" % fdr_name)
+                fdr = p.join(s_fdr, fdr_name)
+                if not p.isdir(fdr):
+                    os.makedirs(fdr)
+
+                # photos はtimelineにはすべての画像URLが含まれない
+                # albumsにアクセスしてjsonを得る
+                sub_item = self.fetchAlbum(sid, item["id"])
+                for p_item in sub_item["photos"]:
+                    url = p_item["url"]
+                    res = self.get(url)
+                    ext = None
+                    if res.headers["content-type"] == "image/jpeg":
+                        ext = ".jpg"
+                    else:
+                        RuntimeError("unknown albam photo content-type: %s" % p_item["id"])
+                    name = url.split("?")[0].split("/")[-1]
+                    fn = "%(display_date)s_%(id)s_%(p_id)s[%(name)s]%(ext)s" % {
+                        "display_date": item_displaydate.isoformat(),
+                        "id": sub_item["id"],  # album id
+                        "p_id": p_item["id"],
+                        "name": name,
+                        "ext": ext
+                    }
+                    if p.exists(p.join(fdr, fn)):
+                        log.info("aleady exists. skip download: %s" % fn)
+                        continue
+
+                    with open(p.join(fdr, fn), 'wb') as f:
+                        f.write(res.content)
+
     # --- handout
 
     def getSID(self):
@@ -850,7 +917,7 @@ class Dumpmon(object):
             return  # self.makeNote_simpleContent(item)
         elif kind == "7":  # お迎え/延長
             return self.makeNote_simpleContent(item)
-        elif kind == "8":  # 遅刻・欠席連絡
+        elif kind == "8":  # 遅刻・欠席連絡 写真販売
             return self.makeNote_simpleContent(item)
         elif kind == "9":  # 都合欠
             return self.makeNote_simpleContent(item)
@@ -925,7 +992,7 @@ class Dumpmon(object):
         elif kind == "9":  # 病欠
             pass  # return self.makeNote_simpleContent(item)
         else:
-        raise RuntimeError("unknown kind: %r" % item)
+            raise RuntimeError("unknown kind: %r" % item)
 
         cons = item["content"].split("\n")
         subtitle = cons[0]
@@ -1083,6 +1150,19 @@ def main():
         nargs=2, metavar=("YYYY-MM-DD", "YYYY-MM-DD"),
         help="Obtain data for a specified date range")
 
+    def dir_path(string):
+        if os.path.isdir(string):
+            return string
+        else:
+            raise NotADirectoryError(string)
+
+    phase.add_argument(
+        "-dd", "--dumpdir", type=dir_path,
+        help="dump directory")
+    phase.add_argument(
+        "-od", "--outputdir", type=dir_path,
+        help="output directory")
+
     parser.add_argument("-v", "--verbosity", help="increase output verbosity", action="store_true")
     parser.add_argument("-q", "--quiet", help="quietly", action="store_true")
 
@@ -1156,6 +1236,7 @@ def main():
     if allExecute or args.download:
         log.info("download...")
         c.downloadTimeline()
+        c.downloadTimelinePhoto()
         c.downloadAllHandout()
     
     if allExecute:
