@@ -33,7 +33,7 @@ _THISDIR = p.dirname(__file__)
 
 _DATA = p.expanduser("~/Desktop/dumpmon")
 _DUMPDIR = p.join(_DATA, "dump")
-_OUTPUTDIR = p.join(_DATA, "output")
+_DEFAULT_OUTPUTDIR = p.join(_DATA, "output")
 
 _TOP_URL = 'https://ps-api.codmon.com'
 _API_URL = _TOP_URL + "/api/v2/parent"
@@ -60,7 +60,7 @@ class Config(object):
             self.conf = json.load(open(self.fn, 'r'))
         else:
             self.conf = _DEFAULT_CONFIG
-    
+
     def save(self):
         json.dump(self.conf, open(self.fn, 'w'), indent=2)
 
@@ -69,7 +69,7 @@ class Config(object):
         return self.data()
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.save()        
+        self.save()
         return
 
     def data(self):
@@ -82,7 +82,7 @@ class Config(object):
 
 class Dumpmon(object):
 
-    def __init__(self, start_date=None, end_date=None):
+    def __init__(self, start_date=None, end_date=None, outputdir=None):
         self.s_date = start_date
         self.e_date = end_date
         self.session = requests.Session()
@@ -101,9 +101,20 @@ class Dumpmon(object):
 
         if not p.isdir(_DUMPDIR):
             os.makedirs(_DUMPDIR)
-        if not p.isdir(_OUTPUTDIR):
-            os.makedirs(_OUTPUTDIR)
-        
+        # if not p.isdir(_DEFAULT_OUTPUTDIR):
+        #     os.makedirs(_DEFAULT_OUTPUTDIR)
+
+        self.outputdir = outputdir
+
+    def getOutputdir(self):
+        if self.outputdir:
+            od = self.outputdir
+        else:
+            od = _DEFAULT_OUTPUTDIR
+        if not p.isdir(od):
+            os.makedirs(od)
+        return od
+
     # --- Login
 
     def testLogin(self):
@@ -307,7 +318,7 @@ class Dumpmon(object):
         for sid in srvs.keys():
             log.debug("service: %s" % sid)
 
-            s_fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
+            s_fdr = p.join(self.getOutputdir(), srvs[sid]["name"])
             for item in self.iterDumpedTimeline(service_id=sid):
                 if self.dateRangeTest(item) != 0:
                     continue
@@ -365,7 +376,7 @@ class Dumpmon(object):
         for sid in srvs.keys():
             log.debug("service: %s" % sid)
 
-            s_fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
+            s_fdr = p.join(self.getOutputdir(), srvs[sid]["name"])
             for item in self.iterDumpedTimeline(service_id=sid):
                 if self.dateRangeTest(item) != 0:
                     continue
@@ -472,7 +483,7 @@ class Dumpmon(object):
                 yield item
 
     def downloadHandout(self, item):
-        fdr = p.join(_OUTPUTDIR, "資料室")
+        fdr = p.join(self.getOutputdir(), "資料室")
         if not p.isdir(fdr):
             os.makedirs(fdr)
         for i, att in enumerate(item["attachments"]):
@@ -736,7 +747,7 @@ class Dumpmon(object):
             items = sorted(items, key=lambda x: x[1:3])
 
             # serviceごとのフォルダ
-            fdr = p.join(_OUTPUTDIR, srvs[sid]["name"])
+            fdr = p.join(self.getOutputdir(), srvs[sid]["name"])
             if not p.isdir(fdr):
                 os.makedirs(fdr)
 
@@ -774,13 +785,14 @@ class Dumpmon(object):
                 with open(p.join(fdr, fn), 'w', encoding="utf-8") as f:
                     txt = "\n".join(allLines[sid][yyyymm])
                     f.write(txt)
-    
+
     def make_attendance(self, atts, att_date):
         def find_date(atts, att_date):
             s_att_date = att_date.isoformat()
             for att in atts:
                 if att["start_date"] == s_att_date:
                     return att
+
         def toStr(att, key):
             if key in att and att[key]:
                 t = time.fromisoformat(att[key])
@@ -796,7 +808,7 @@ class Dumpmon(object):
         srvs = self.getServices()
         for sid in srvs.keys():
             sname = srvs[sid]["name"]
-            fdr = p.join(_OUTPUTDIR, sname)
+            fdr = p.join(self.getOutputdir(), sname)
             for fn in os.listdir(fdr):
                 if fn.endswith(" note.rst"):
                     toc_lines.append("    %s/%s\n" % (sname, fn[:-4]))
@@ -808,7 +820,7 @@ class Dumpmon(object):
         )
 
         lines = []
-        index_file = p.join(_OUTPUTDIR, 'index.rst')
+        index_file = p.join(self.getOutputdir(), 'index.rst')
         if p.isfile(index_file):
             bInTocTree = False
             bEmptyLine = False
@@ -841,7 +853,6 @@ class Dumpmon(object):
             lines.extend(toc_lines)
         with open(index_file, 'w', encoding="utf-8") as f:
             f.writelines(lines)
-
 
     def makeNote_simpleContent(self, item):
         lines = ["\n"]
@@ -901,29 +912,35 @@ class Dumpmon(object):
         return lines
 
     def procTimeLineItem(self, item):
-        if "kind" in item:
-            kind = item["kind"]
-        elif "timeline_kind" in item:
-            kind = item["timeline_kind"]
+        kindMap = {
+            'bills': {
+                None: None,
+            },
+            'comments': {
+                '4': self.makeNote_renraku,  # 連絡帳
+            },
+            'responses': {
+                '3': self.makeNote_simpleContent,  # '遅刻・欠席連絡', '連絡'
+                '6': self.makeNote_simpleContent,  # '遅刻・欠席連絡', '遅刻'
+                '7': self.makeNote_simpleContent,  # '遅刻・欠席連絡', 'お迎え/延長'
+                '8': self.makeNote_simpleContent,  # '遅刻・欠席連絡', '病欠'
+            },
+            'topics': {
+                '1': self.makeNote_simpleContent,  #
+                '6': self.makeNote_simpleContent,  # アンケート
+                '8': None,  # album
+            }
+        }
+        tk = item["timeline_kind"]
+        k = item.get("kind")
+        if tk not in kindMap:
+            log.warning("Unknown timeline_kind: %s" % tk)
+        elif k not in kindMap[tk]:
+            log.warning("Unknown kind: %s (%s)" % (k, tk))
         else:
-            kind = None
-        if kind == "1":  # お知0らせ
-            return self.makeNote_simpleContent(item)
-        elif kind == "3":  # 連絡
-            return self.makeNote_simpleContent(item)
-        elif kind == "4":  # 連絡帳
-            return self.makeNote_renraku(item)
-        elif kind == "6":  # アンケート
-            return  # self.makeNote_simpleContent(item)
-        elif kind == "7":  # お迎え/延長
-            return self.makeNote_simpleContent(item)
-        elif kind == "8":  # 遅刻・欠席連絡 写真販売
-            return self.makeNote_simpleContent(item)
-        elif kind == "9":  # 都合欠
-            return self.makeNote_simpleContent(item)
-        elif kind == "bills":
-            return ""
-        raise RuntimeError("unknown kind: %r" % item)
+            proc = kindMap[tk].get(k)
+            if proc:
+                return proc(item)
 
     def procCommentItem(self, item):
         kind = item["kind"]
@@ -1127,10 +1144,13 @@ def main():
     オプションを指定しないと、最後に実行した日までのデータを取得します。
 
     """
+
+    # --- init argument parse
+
     parser = argparse.ArgumentParser(
         description="Fetches and dumps codmon data.",
         epilog="Login ID and cookies are stored here: %s" % Dumpmon().appdatadir,
-        )
+    )
 
     phase = parser.add_argument_group(title="phase", description="Limit the execution phase")
     phase.add_argument("-f", "--fetch", help="fetch json", action="store_true")
@@ -1160,12 +1180,13 @@ def main():
         "-dd", "--dumpdir", type=dir_path,
         help="dump directory")
     phase.add_argument(
-        "-od", "--outputdir", type=dir_path,
+        "-od", "--outputdir", type=str,
         help="output directory")
 
     parser.add_argument("-v", "--verbosity", help="increase output verbosity", action="store_true")
     parser.add_argument("-q", "--quiet", help="quietly", action="store_true")
 
+    # do argument parse
     args = parser.parse_args()
 
     # --- log level
@@ -1206,11 +1227,10 @@ def main():
     partialExecutionEnabled = args.fetch or args.download or args.makenote
     allExecute = not partialExecutionEnabled
 
-
     # -- login
 
     log.debug("debug")
-    c = Dumpmon(start_date=s_date, end_date=e_date)
+    c = Dumpmon(start_date=s_date, end_date=e_date, outputdir=args.outputdir)
     if not c.testLogin():
         c.login()
         while (not c.testLogin()):
@@ -1238,7 +1258,7 @@ def main():
         c.downloadTimeline()
         c.downloadTimelinePhoto()
         c.downloadAllHandout()
-    
+
     if allExecute:
         with Config() as conf:
             conf["lastFetchedDate"] = s_date.isoformat()
