@@ -781,6 +781,7 @@ class Dumpmon(object):
                 with open(p.join(fdr, fn), 'w', encoding="utf-8") as f:
                     txt = "\n".join(allLines[sid][yyyymm])
                     f.write(txt)
+        self.make_index()
 
     def make_attendance(self, atts, att_date):
         """ 登園時間
