@@ -104,16 +104,12 @@ class Dumpmon(object):
         # if not p.isdir(_DEFAULT_OUTPUTDIR):
         #     os.makedirs(_DEFAULT_OUTPUTDIR)
 
-        self.outputdir = outputdir
-
-    def getOutputdir(self):
-        if self.outputdir:
-            od = self.outputdir
+        if outputdir:
+            self.outputdir = self.outputdir
         else:
-            od = _DEFAULT_OUTPUTDIR
-        if not p.isdir(od):
-            os.makedirs(od)
-        return od
+            self.outputdir = _DEFAULT_OUTPUTDIR
+        if not p.isdir(self.outputdir):
+            os.makedirs(self.outputdir)
 
     # --- Login
 
@@ -318,7 +314,7 @@ class Dumpmon(object):
         for sid in srvs.keys():
             log.debug("service: %s" % sid)
 
-            s_fdr = p.join(self.getOutputdir(), srvs[sid]["name"])
+            s_fdr = p.join(self.outputdir, srvs[sid]["name"])
             for item in self.iterDumpedTimeline(service_id=sid):
                 if self.dateRangeTest(item) != 0:
                     continue
@@ -376,7 +372,7 @@ class Dumpmon(object):
         for sid in srvs.keys():
             log.debug("service: %s" % sid)
 
-            s_fdr = p.join(self.getOutputdir(), srvs[sid]["name"])
+            s_fdr = p.join(self.outputdir, srvs[sid]["name"])
             for item in self.iterDumpedTimeline(service_id=sid):
                 if self.dateRangeTest(item) != 0:
                     continue
@@ -483,7 +479,7 @@ class Dumpmon(object):
                 yield item
 
     def downloadHandout(self, item):
-        fdr = p.join(self.getOutputdir(), "資料室")
+        fdr = p.join(self.outputdir, "資料室")
         if not p.isdir(fdr):
             os.makedirs(fdr)
         for i, att in enumerate(item["attachments"]):
@@ -747,7 +743,7 @@ class Dumpmon(object):
             items = sorted(items, key=lambda x: x[1:3])
 
             # serviceごとのフォルダ
-            fdr = p.join(self.getOutputdir(), srvs[sid]["name"])
+            fdr = p.join(self.outputdir, srvs[sid]["name"])
             if not p.isdir(fdr):
                 os.makedirs(fdr)
 
@@ -787,6 +783,12 @@ class Dumpmon(object):
                     f.write(txt)
 
     def make_attendance(self, atts, att_date):
+        """ 登園時間
+
+        Args:
+            atts (list): attendance data from dumped json
+            att_date (date): date
+        """
         def find_date(atts, att_date):
             s_att_date = att_date.isoformat()
             for att in atts:
@@ -808,7 +810,7 @@ class Dumpmon(object):
         srvs = self.getServices()
         for sid in srvs.keys():
             sname = srvs[sid]["name"]
-            fdr = p.join(self.getOutputdir(), sname)
+            fdr = p.join(self.outputdir, sname)
             for fn in os.listdir(fdr):
                 if fn.endswith(" note.rst"):
                     toc_lines.append("    %s/%s\n" % (sname, fn[:-4]))
@@ -820,7 +822,7 @@ class Dumpmon(object):
         )
 
         lines = []
-        index_file = p.join(self.getOutputdir(), 'index.rst')
+        index_file = p.join(self.outputdir, 'index.rst')
         if p.isfile(index_file):
             bInTocTree = False
             bEmptyLine = False
@@ -1138,6 +1140,12 @@ def htmlToRst(txt):
     return content
 
 
+def callSphinxBuld(outputdir):
+    from sphinx.cmd import make_mode
+    # builder, source dir, build dir
+    return make_mode.run_make_mode(["html", outputdir, p.join(outputdir, "_build") ])
+
+
 def main():
     """
     コドモンにログインして閲覧できる情報をダウンロードする
@@ -1156,6 +1164,7 @@ def main():
     phase.add_argument("-f", "--fetch", help="fetch json", action="store_true")
     phase.add_argument("-dl", "--download", help="download attachment file", action="store_true")
     phase.add_argument("-m", "--makenote", help="make communication notebook", action="store_true")
+    phase.add_argument("-b", "--builddoc", help="build sphinx document", action="store_true")
 
     daterange = parser.add_argument_group(title="daterange", description="Fetch Date Range")
     group = daterange.add_mutually_exclusive_group()
@@ -1224,7 +1233,7 @@ def main():
 
     # --- phase select
 
-    partialExecutionEnabled = args.fetch or args.download or args.makenote
+    partialExecutionEnabled = args.fetch or args.download or args.makenote or args.builddoc
     allExecute = not partialExecutionEnabled
 
     # -- login
@@ -1269,6 +1278,9 @@ def main():
     if allExecute or args.makenote:
         log.info("makenote...")
         c.makenote()
+    if allExecute or args.builddoc:
+        log.info("build document...")
+        callSphinxBuld(c.outputdir)
 
 
 if __name__ == "__main__":
