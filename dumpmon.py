@@ -1141,7 +1141,28 @@ def htmlToRst(txt):
     return content
 
 
-def callSphinxBuld(outputdir):
+def callSphinxSetup(outputdir):
+    from sphinx.cmd.quickstart import generate
+
+    opt = {
+        'path': 'outputdir',
+        'sep': False,
+        'dot': '_',
+        'project': 'x',
+        'author': 'x', 'version': '',
+        'release': '',
+        'language': None,
+        'suffix': '.rst',
+        'master': 'index',
+        'extensions': [],
+        'makefile': True,
+        'batchfile': False
+    }
+
+    generate(opt, overwrite=False, templatedir=args.templatedir)
+
+
+def callSphinxBuild(outputdir):
     from sphinx.cmd import make_mode
     # builder, source dir, build dir
     return make_mode.run_make_mode(["html", outputdir, p.join(outputdir, "_build") ])
@@ -1281,7 +1302,7 @@ def main():
         c.makenote()
     if allExecute or args.builddoc:
         log.info("build document...")
-        callSphinxBuld(c.outputdir)
+        callSphinxBuild(c.outputdir)
 
 
 if __name__ == "__main__":
