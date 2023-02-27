@@ -1145,7 +1145,7 @@ def callSphinxSetup(outputdir):
     from sphinx.cmd.quickstart import generate
 
     opt = {
-        'path': 'outputdir',
+        'path': outputdir,
         'sep': False,
         'dot': '_',
         'project': 'x',
@@ -1159,7 +1159,7 @@ def callSphinxSetup(outputdir):
         'batchfile': False
     }
 
-    generate(opt, overwrite=False, templatedir=args.templatedir)
+    generate(opt, overwrite=False, templatedir=None)
 
 
 def callSphinxBuild(outputdir):
