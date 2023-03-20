@@ -1158,14 +1158,14 @@ def callSphinxSetup(outputdir):
         'makefile': True,
         'batchfile': False
     }
-
-    generate(opt, overwrite=False, templatedir=None)
+    if not p.exists(p.join(outputdir, "conf.py")):
+        generate(opt, overwrite=False, templatedir=None)
 
 
 def callSphinxBuild(outputdir):
     from sphinx.cmd import make_mode
     # builder, source dir, build dir
-    return make_mode.run_make_mode(["html", outputdir, p.join(outputdir, "_build") ])
+    return make_mode.run_make_mode(["html", outputdir, p.join(outputdir, "_build")])
 
 
 def main():
@@ -1302,6 +1302,7 @@ def main():
         c.makenote()
     if allExecute or args.builddoc:
         log.info("build document...")
+        callSphinxSetup(c.outputdir)
         callSphinxBuild(c.outputdir)
 
 
