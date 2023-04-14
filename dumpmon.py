@@ -326,7 +326,7 @@ class Dumpmon(object):
                 fdr = p.join(s_fdr, fdr_name)
                 if not p.isdir(fdr):
                     os.makedirs(fdr)
-                fn_head = ("%(display_date)s [%(title)s]" % item)
+                fn_head = sanitize_filename("%(display_date)s [%(title)s]" % item)
 
                 if dlFileExists(fdr, fn_head):
                     log.info("aleady exists. skip download: %s" % fn_head)
@@ -337,7 +337,7 @@ class Dumpmon(object):
                 cd = res.headers['Content-Disposition']
                 dl_name = parseContnentDisporition(cd)
 
-                fn = fn_head + " " + dl_name
+                fn = fn_head + " " + sanitize_filename(dl_name)
                 with open(p.join(fdr, fn), 'wb') as f:
                     f.write(res.content)
 
@@ -1155,7 +1155,7 @@ def callSphinxSetup(outputdir):
         'suffix': '.rst',
         'master': 'index',
         'extensions': [],
-        'makefile': True,
+        'makefile': False,
         'batchfile': False
     }
 
@@ -1166,6 +1166,14 @@ def callSphinxBuild(outputdir):
     from sphinx.cmd import make_mode
     # builder, source dir, build dir
     return make_mode.run_make_mode(["html", outputdir, p.join(outputdir, "_build") ])
+
+
+def sanitize_filename(filename):
+    # ファイル名として使えない文字を置換する
+    invalid_chars = '<>:"/\\|?*\n'
+    replace_chars = '＜＞：”／＼｜？＊_'
+    table = str.maketrans(invalid_chars, replace_chars)
+    return filename.translate(table)
 
 
 def main():
