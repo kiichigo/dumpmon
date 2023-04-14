@@ -12,7 +12,7 @@ Codmonの仕様を網羅しているわけではありません。
 import argparse
 from datetime import date, time, datetime, timedelta
 import getpass
-import gettext
+# import gettext
 import json
 import logging
 import os
@@ -81,6 +81,11 @@ class Config(object):
 
 
 class Dumpmon(object):
+    """ DumpmonはCodmonサイトへのアクセスとデータの吐き出しを行います。
+
+    Args:
+        object (_type_): _description_
+    """
 
     def __init__(self, start_date=None, end_date=None, outputdir=None):
         self.s_date = start_date
@@ -114,6 +119,12 @@ class Dumpmon(object):
     # --- Login
 
     def testLogin(self):
+        """ファイルに保存してあったCookieを読み込み、/parentsを取得試みます。
+        取得できたらログイン状態でりTreuを返します。
+
+        Returns:
+            bool: ログイン状態ならTrue
+        """
         self.loadCookie()
         # test
         res = self.session.get(_API_URL + "/parents")
@@ -121,6 +132,20 @@ class Dumpmon(object):
         return res.status_code == 200
 
     def login(self, useSavedId=True):
+        """ ログイン処理
+        まず、ログイン状態かどうか確認するためにtestLogin()をします。
+        ログイン状態であればこの関数を終了します。
+        コンフィグにidがあればそれを使い、なければlogin:プロンプトを出して入力を促します。
+        入力されたIDはコンフィグのidに保存します。
+        password:プロンプトをだして入力を促します。
+        セッションでログインpostを送信しログイン成功したらCookieを保存します。
+
+        Args:
+            useSavedId (bool, optional): _description_. Defaults to True.
+
+        Returns:
+            _type_: _description_
+        """
         if self.testLogin():
             return
         conf = Config()
@@ -155,7 +180,13 @@ class Dumpmon(object):
             'User-Agent': 'dumpmon',
         }
         headers = dictmerge(defaultHaeders, (headers or {}))
-        res = self.session.get(url, headers=headers)
+        for i in range(10):
+            try:
+                res = self.session.get(url, headers=headers)
+                break
+            except requests.exceptions.ConnectionError:
+                log.error("retry: %d %s" % (i, url))
+                sleep(2.0)
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
         sleep(1.0)
@@ -734,12 +765,12 @@ class Dumpmon(object):
                     else:
                         display_date = date_time.date()
                     items.append((category, display_date, date_time, item))
-
+            # itemを収集する
             items = []
             getItems(items, "timeline", self.iterDumpedTimeline)
             getItems(items, "comment", self.iterDumpedComments)
             getItems(items, "contactresponse", self.iterDumpedContactResponses)
-            # DisplayDateでソートする
+            # itemsをDisplayDateでソートする
             items = sorted(items, key=lambda x: x[1:3])
 
             # serviceごとのフォルダ
@@ -749,9 +780,13 @@ class Dumpmon(object):
 
             # 処理中の日付
             cur_date = None
+
+            # 時系列にitemsを処理していく
             for item_src, item_displaydate, item_datetime, item in items:
                 yyyymm = item_displaydate.strftime("%Y-%m")
                 # month header
+                # 月ごとにファイルをわけそのヘッダを作る
+                # 新しい月を検出したら実行
                 if yyyymm not in allLines[sid]:
                     title = "%s %s" % (srvs[sid]["name"], item_displaydate.strftime("%Y年%m月"))
                     line = "\n%(line)s\n%(title)s\n%(line)s\n" % {"title": title, "line": "=" * width(title)}
@@ -767,6 +802,7 @@ class Dumpmon(object):
                     if attLine:
                         allLines[sid][yyyymm].append(attLine)
 
+                # itemの種類ごとに内容を生成する
                 itemProcFunc = itemProcMap[item_src]
                 lines = itemProcFunc(item)
                 if lines:
@@ -776,6 +812,7 @@ class Dumpmon(object):
             for yyyymm in allLines[sid].keys():
                 pass
 
+            # write to file
             for yyyymm in allLines[sid].keys():
                 fn = "%s note.rst" % yyyymm
                 with open(p.join(fdr, fn), 'w', encoding="utf-8") as f:
@@ -915,6 +952,16 @@ class Dumpmon(object):
         return lines
 
     def procTimeLineItem(self, item):
+        """timelineのitemを処理する
+
+        timelineには、timeline_kindがありそれぞれのitemがまたkindを持っていたりする。
+
+        Args:
+            item (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
         kindMap = {
             'bills': {
                 None: None,
@@ -929,13 +976,14 @@ class Dumpmon(object):
                 '8': self.makeNote_simpleContent,  # '遅刻・欠席連絡', '病欠'
             },
             'topics': {
-                '1': self.makeNote_simpleContent,  #
-                '6': self.makeNote_simpleContent,  # アンケート
+                '1': None,  # self.makeNote_simpleContent,  #
+                '6': None,  # self.makeNote_simpleContent,  # アンケート
                 '8': None,  # album
             }
         }
         tk = item["timeline_kind"]
         k = item.get("kind")
+        lines = []
         if tk not in kindMap:
             log.warning("Unknown timeline_kind: %s" % tk)
         elif k not in kindMap[tk]:
@@ -943,7 +991,9 @@ class Dumpmon(object):
         else:
             proc = kindMap[tk].get(k)
             if proc:
-                return proc(item)
+                lines = proc(item)
+        lines.insert(0, '\n- item: timeline, tk:%s,  k:%s\n' % (tk, k))
+        return lines
 
     def procCommentItem(self, item):
         kind = item["kind"]
@@ -995,9 +1045,11 @@ class Dumpmon(object):
                 memo = content["memo"]
                 for line in memo.split("\n"):
                     lines.append("| %s" % line)
-            return lines
+        else:
+            raise RuntimeError("unknown kind: %r" % item)
 
-        raise RuntimeError("unknown kind: %r" % item)
+        lines.insert(0, "\n- item: Comment\n")
+        return lines
 
     def procContactResponseItem(self, item):
         kind = item["kind"]
@@ -1025,6 +1077,7 @@ class Dumpmon(object):
         lines.append("-" * width(title))
         lines.extend(content)
 
+        lines.insert(0, "\n- item: ContactResponse\n")
         return lines
 
 
@@ -1158,14 +1211,14 @@ def callSphinxSetup(outputdir):
         'makefile': False,
         'batchfile': False
     }
-
-    generate(opt, overwrite=False, templatedir=None)
+    if not p.exists(p.join(outputdir, "conf.py")):
+        generate(opt, overwrite=False, templatedir=None)
 
 
 def callSphinxBuild(outputdir):
     from sphinx.cmd import make_mode
     # builder, source dir, build dir
-    return make_mode.run_make_mode(["html", outputdir, p.join(outputdir, "_build") ])
+    return make_mode.run_make_mode(["html", outputdir, p.join(outputdir, "_build")])
 
 
 def sanitize_filename(filename):
@@ -1310,6 +1363,7 @@ def main():
         c.makenote()
     if allExecute or args.builddoc:
         log.info("build document...")
+        callSphinxSetup(c.outputdir)
         callSphinxBuild(c.outputdir)
 
 
