@@ -180,7 +180,13 @@ class Dumpmon(object):
             'User-Agent': 'dumpmon',
         }
         headers = dictmerge(defaultHaeders, (headers or {}))
-        res = self.session.get(url, headers=headers)
+        for i in range(10):
+            try:
+                res = self.session.get(url, headers=headers)
+                break
+            except requests.exceptions.ConnectionError:
+                log.error("retry: %d %s" % (i, url))
+                sleep(2.0)
         if res.status_code != 200:
             raise RuntimeError("%r" % res)
         sleep(1.0)
