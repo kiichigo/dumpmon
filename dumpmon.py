@@ -1136,6 +1136,16 @@ def dictmerge(d1, d2):
 
 
 def width(txt: str):
+    """ 全角半角を考慮してtextの幅を得る
+    
+    unicodedata.east_asian_width で FWA のどれかなら 2 それ以外は1の幅として合計を得る
+    
+    Args:
+        txt (str): テキスト
+
+    Returns:
+        int: width
+    """    
     return sum(2 if unicodedata.east_asian_width(x) in 'FWA' else 1 for x in txt)
 
 
