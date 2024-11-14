@@ -154,7 +154,7 @@ class Dumpmon(object):
         else:
             id = input("login: ")
             with Config() as data:
-                data()["id"] = id
+                data["id"] = id
         pw = getpass.getpass("password: ")
         loginPayload = {"login_id": id, "login_password": pw}
         res = self.session.post(_API_URL + "/login?__env__=myapp", data=loginPayload)
@@ -509,8 +509,12 @@ class Dumpmon(object):
             if self.dateRangeTest(item) == 0:
                 yield item
 
+    def handoutDownloadFolder(self):
+        return p.join(self.outputdir, "資料室")
+
+
     def downloadHandout(self, item):
-        fdr = p.join(self.outputdir, "資料室")
+        fdr = self.handoutDownloadFolder()  # p.join(self.outputdir, "資料室")
         if not p.isdir(fdr):
             os.makedirs(fdr)
         for i, att in enumerate(item["attachments"]):
@@ -724,6 +728,31 @@ class Dumpmon(object):
                         tempdatetime = datetime.combine(itemdate, temptime)
                         yield (tempdatetime, tempitem["temprature"])
 
+    def iterDumpedSleepings(self, service_id=None):
+        srvs = self.getServices()
+        for sid in srvs.keys():
+            if service_id and sid != service_id:
+                continue
+            for item in self.iterDumpedTimeline(service_id=sid):
+                if item["timeline_kind"] != "comments":
+                    continue
+                if "content" not in item or item["content"] is None:
+                    continue
+                try:
+                    content = json.loads(item["content"])
+                except json.JSONDecodeError:
+                    continue
+                if "sleepings" in content:
+                    # \"sleepings\":\"10:35~10:50\\n12:20~13:35\"
+                    timeranges = content["sleepings"].split("\n")
+                    slps = []
+                    for rng in timeranges:
+                        m = re.match(r'(\d+):(\d+)~(\d+):(\d+)', rng)
+                        if m:
+                            slps.append(((m.group(1), m.group(2)), (m.group(3), m.group(4))))
+                    #slps = [re.match(r'(\d+):(\d+)~(\d+):(\d+)', rng).groups() for rng in content["sleepings"].split("\n")]
+                    yield (item["display_date"], slps)
+
     # --- Attendances
 
     def fetchAttendances(self):
@@ -744,11 +773,52 @@ class Dumpmon(object):
     # --- communication notebook ---
     # --
 
+
+    def calculate_age_in_months_and_weeks(self, birth_date, given_date):
+        # 年齢を計算
+        age = given_date.year - birth_date.year
+        if (given_date.month, given_date.day) < (birth_date.month, birth_date.day):
+            age -= 1
+
+        # 生年月日とある日付の差を計算
+        difference_in_days = given_date - birth_date
+
+        # 月齢を計算
+        months = age * 12 + difference_in_days.days // 30
+
+        # 週数を計算
+        weeks = difference_in_days.days // 7
+
+        return months, weeks
+
+    def calculate_age(self, birth_date, current_date):
+        # 生年月日から年齢を計算
+        years = current_date.year - birth_date.year
+        months = current_date.month - birth_date.month
+        days = current_date.day - birth_date.day
+
+        # 日付修正
+        if days < 0:
+            # 日数がマイナスの場合は月を調整
+            months -= 1
+            # 現在の月を取得
+            previous_month = (current_date.month - 1) if current_date.month > 1 else 12
+            # 月の最終日を取得
+            days_in_previous_month = (current_date - datetime(current_date.year, previous_month, 1)).days
+            days += days_in_previous_month
+
+        # 月がマイナスの場合は年を調整
+        if months < 0:
+            years -= 1
+            months += 12
+
+        return years, months, days
+    
     def makenote(self):
         itemProcMap = {
             "timeline": self.procTimeLineItem,
             "comment": self.procCommentItem,
-            "contactresponse": self.procContactResponseItem
+            #"contactresponse": self.procContactResponseItem
         }
         self.fetchAttendances()  # debug
         atts = self.loadDumpedAttendances()
@@ -795,18 +865,24 @@ class Dumpmon(object):
                 if cur_date is None or cur_date != item_displaydate:
                     cur_date = item_displaydate
                     title = "%s" % item_displaydate.strftime("%m月%d日")
+                    child_birth_date = datetime(2021, 3, 12)
+                    cur_datetime = datetime.combine(cur_date, datetime.min.time())
+
+                    months, weeks, days = self.calculate_age(child_birth_date, cur_datetime)
+                    title += "    %d歳%dヶ月" % (months, weeks)
                     line = "\n%s\n%s\n" % (title, "=" * width(title))
                     allLines[sid][yyyymm].append(line)
-                    # 登園時間
-                    attLine = self.make_attendance(atts, cur_date)
-                    if attLine:
-                        allLines[sid][yyyymm].append(attLine)
+                    # # 登園時間
+                    # attLine = self.make_attendance(atts, cur_date)
+                    # if attLine:
+                    #     allLines[sid][yyyymm].append(attLine)
 
                 # itemの種類ごとに内容を生成する
-                itemProcFunc = itemProcMap[item_src]
-                lines = itemProcFunc(item)
-                if lines:
-                    allLines[sid][yyyymm].extend(lines)
+                itemProcFunc = itemProcMap.get(item_src)
+                if itemProcFunc:
+                    lines = itemProcFunc(item)
+                    if lines:
+                        allLines[sid][yyyymm].extend(lines)
 
             # footer
             for yyyymm in allLines[sid].keys():
@@ -849,7 +925,7 @@ class Dumpmon(object):
         for sid in srvs.keys():
             sname = srvs[sid]["name"]
             fdr = p.join(self.outputdir, sname)
-            for fn in os.listdir(fdr):
+            for fn in sorted(os.listdir(fdr)):
                 if fn.endswith(" note.rst"):
                     toc_lines.append("    %s/%s\n" % (sname, fn[:-4]))
 
@@ -918,36 +994,37 @@ class Dumpmon(object):
             lines.append(indent + ".. " + line)
         lines.append("\n")
         _time = self.itemDateTime(item).strftime("%H:%M")
-        title = "\n連絡帳 " + _time
-        lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
+        title = "\n- 園から 連絡帳 " + _time
+        lines.append("%(title)s\n" % {"title": title})
+        #lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
 
         for line in memo.split("\n"):
             wrappedLines = [x for x in textwrap.wrap(line, width=30) if x]
             lines.extend(wrappedLines)
             lines.append("\n")
         memo = "\n".join(lines)
-        mood_ = []
-        if "mood_morning" in c:
-            mood_.append(indent + "| 朝(%s)" % c["mood_morning"])
-        if "mood_afternoon" in c:
-            mood_.append(indent + "| 夕(%s)" % c["mood_afternoon"])
-        if mood_:
-            lines.append("\n機嫌")
-            lines.extend(mood_)
+        # mood_ = []
+        # if "mood_morning" in c:
+        #     mood_.append(indent + "| 朝(%s)" % c["mood_morning"])
+        # if "mood_afternoon" in c:
+        #     mood_.append(indent + "| 夕(%s)" % c["mood_afternoon"])
+        # if mood_:
+        #     lines.append("\n機嫌")
+        #     lines.extend(mood_)
 
-        if "sleepings" in c and c["sleepings"]:
-            lines.append("\n午睡")
-            lines.extend([indent + "| " + x for x in c["sleepings"].split("\n")])
-        else:
-            lines.append("\n午睡なし")
+        # if "sleepings" in c and c["sleepings"]:
+        #     lines.append("\n午睡")
+        #     lines.extend([indent + "| " + x for x in c["sleepings"].split("\n")])
+        # else:
+        #     lines.append("\n午睡なし")
 
-        ts = []
-        for t in c["tempratures"]:
-            _time = time.fromisoformat(t["temprature_time"])
-            ts.append(indent + "| %s℃ (%s)" % (t["temprature"], _time.strftime("%H:%M")))
-        if ts:
-            lines.append("\n体温")
-            lines.extend(ts)
+        # ts = []
+        # for t in c["tempratures"]:
+        #     _time = time.fromisoformat(t["temprature_time"])
+        #     ts.append(indent + "| %s℃ (%s)" % (t["temprature"], _time.strftime("%H:%M")))
+        # if ts:
+        #     lines.append("\n体温")
+        #     lines.extend(ts)
 
         return lines
 
@@ -992,7 +1069,7 @@ class Dumpmon(object):
             proc = kindMap[tk].get(k)
             if proc:
                 lines = proc(item)
-        lines.insert(0, '\n- item: timeline, tk:%s,  k:%s\n' % (tk, k))
+        # DBG: lines.insert(0, '\n- item: timeline, tk:%s,  k:%s\n' % (tk, k))
         return lines
 
     def procCommentItem(self, item):
@@ -1002,43 +1079,44 @@ class Dumpmon(object):
             lines = ["\n"]
 
             _time = self.itemDateTime(item).strftime("%H:%M")
-            title = "保護者連絡 " + _time
-            lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
+            title = "- 保護者連絡 " + _time
+            lines.append("%(title)s\n" % {"title": title})
+            #lines.append("%(title)s\n%(line)s" % {"title": title, "line": "-" * width(title)})
 
             indent = " " * 4
-            mood_ = []
-            if "mood_afternoon" in content:
-                mood_.append(indent + "| 夕(%s)" % content["mood_afternoon"])
-            if "mood_morning" in content:
-                mood_.append(indent + "| 朝(%s)" % content["mood_morning"])
-            if mood_:
-                lines.append("\n機嫌")
-                lines.extend(mood_)
+            # mood_ = []
+            # if "mood_afternoon" in content:
+            #     mood_.append(indent + "| 夕(%s)" % content["mood_afternoon"])
+            # if "mood_morning" in content:
+            #     mood_.append(indent + "| 朝(%s)" % content["mood_morning"])
+            # if mood_:
+            #     lines.append("\n機嫌")
+            #     lines.extend(mood_)
 
-            ev_ = []
-            if "evacuation_evening" in content:
-                ev_.append("夕 (%s) " % content["evacuation_evening"])
-            if "evacuation_morning" in content:
-                ev_.append("朝 (%s) " % content["evacuation_morning"])
-            if ev_:
-                lines.append("\n" + " ".join(["排便"] + ev_))
+            # ev_ = []
+            # if "evacuation_evening" in content:
+            #     ev_.append("夕 (%s) " % content["evacuation_evening"])
+            # if "evacuation_morning" in content:
+            #     ev_.append("朝 (%s) " % content["evacuation_morning"])
+            # if ev_:
+            #     lines.append("\n" + " ".join(["排便"] + ev_))
 
             def toBlock(txt):
                 for line in txt.split("\n"):
                     yield indent + "| " + line
-            meal_ = []
-            if "meal_evening" in content:
-                meal_.append("\n夕食")
-                meal_.extend(toBlock(content["meal_evening"]))
-            if "meal_morning" in content:
-                meal_.append("\n朝食")
-                meal_.extend(toBlock(content["meal_morning"]))
-            if meal_:
-                lines.extend(meal_)
+            # meal_ = []
+            # if "meal_evening" in content:
+            #     meal_.append("\n夕食")
+            #     meal_.extend(toBlock(content["meal_evening"]))
+            # if "meal_morning" in content:
+            #     meal_.append("\n朝食")
+            #     meal_.extend(toBlock(content["meal_morning"]))
+            # if meal_:
+            #     lines.extend(meal_)
 
-            if "temprature" in content:
-                lines.append("\n検温")
-                lines.append(indent + "%(temprature_time)s %(temprature)s ℃" % content)
+            # if "temprature" in content:
+            #     lines.append("\n検温")
+            #     lines.append(indent + "%(temprature_time)s %(temprature)s ℃" % content)
 
             if "memo" in content:
                 lines.append("\n")
@@ -1048,7 +1126,7 @@ class Dumpmon(object):
         else:
             raise RuntimeError("unknown kind: %r" % item)
 
-        lines.insert(0, "\n- item: Comment\n")
+        # DBG: lines.insert(0, "\n- item: Comment\n")
         return lines
 
     def procContactResponseItem(self, item):
@@ -1077,8 +1155,36 @@ class Dumpmon(object):
         lines.append("-" * width(title))
         lines.extend(content)
 
-        lines.insert(0, "\n- item: ContactResponse\n")
+        # DBG: lines.insert(0, "\n- item: ContactResponse\n")
         return lines
+
+    def makeSleep(self):
+        srvs = self.getServices()
+
+        allLines = {}
+        for sid in srvs.keys():
+            fdr = p.join(self.outputdir, srvs[sid]["name"])
+            if not p.isdir(fdr):
+                os.makedirs(fdr)
+            with open(p.join(fdr, "sleepings.json"), "w") as f:
+                data = {}
+                for display_date, slps in self.iterDumpedSleepings(sid):
+                    data[display_date] = list(slps)
+                json.dump(data, f, ensure_ascii=False, indent=4)
+
+    def makeTouen(self):
+        srvs = self.getServices()
+
+        allLines = {}
+        for sid in srvs.keys():
+            fdr = p.join(self.outputdir, srvs[sid]["name"])
+            if not p.isdir(fdr):
+                os.makedirs(fdr)
+            with open(p.join(fdr, "touen.json"), "w") as f:
+                data = {}
+                for display_date, slps in self.iterDumpedSleepings(sid):
+                    data[display_date] = list(slps)
+                json.dump(data, f, ensure_ascii=False, indent=4)
 
 
 # --- util
@@ -1239,6 +1345,42 @@ def sanitize_filename(filename):
     return filename.translate(table)
 
 
+def pdfextract(dumpmon):
+    import fitz
+    procPathes = [
+        dumpmon.handoutDownloadFolder()
+    ]
+    def getTimelineOutputPathes():
+        srvs = dumpmon.getServices()
+        for sid in srvs.keys():
+            log.debug("service: %s" % sid)
+            s_fdr = p.join(dumpmon.outputdir, srvs[sid]["name"])
+            yield s_fdr
+    procPathes.extend(getTimelineOutputPathes())
+    def listPdf():
+        for top in procPathes:
+            for dirpath, dirnames, files in os.walk(top):
+                for fn in files:
+                    if fn.endswith(".pdf"):
+                        yield (dirpath, fn)
+    for dirpath, fn in listPdf():
+        outdir = p.join(dirpath, p.splitext(fn)[0])
+        log.info("extract: %s" % outdir)
+        os.makedirs(outdir, exist_ok=True)
+        try:
+            pdf = fitz.open(p.join(dirpath, fn))
+        except Exception:
+            raise
+        for i, page in enumerate(pdf):
+            for j, img in enumerate(page.get_images()):
+                img_id = img[0]
+                img_data = pdf.extract_image(img_id)
+                name = p.join(outdir, "%04d_%04d.%s" % (i, j, img_data["ext"]) )
+                with open(name, "wb") as f:
+                    f.write(img_data["image"])
+
+
+
 def main():
     """
     コドモンにログインして閲覧できる情報をダウンロードする
@@ -1257,7 +1399,9 @@ def main():
     phase.add_argument("-f", "--fetch", help="fetch json", action="store_true")
     phase.add_argument("-dl", "--download", help="download attachment file", action="store_true")
     phase.add_argument("-m", "--makenote", help="make communication notebook", action="store_true")
+    phase.add_argument("-s", "--makesleep", help="make sleep data", action="store_true")
     phase.add_argument("-b", "--builddoc", help="build sphinx document", action="store_true")
+    phase.add_argument("-ext", "--extract", help="extract pdf images", action="store_true")
 
     daterange = parser.add_argument_group(title="daterange", description="Fetch Date Range")
     group = daterange.add_mutually_exclusive_group()
@@ -1326,40 +1470,40 @@ def main():
 
     # --- phase select
 
-    partialExecutionEnabled = args.fetch or args.download or args.makenote or args.builddoc
+    partialExecutionEnabled = args.fetch or args.download or args.makenote or args.builddoc or args.extract or args.makesleep
     allExecute = not partialExecutionEnabled
 
     # -- login
 
     log.debug("debug")
-    c = Dumpmon(start_date=s_date, end_date=e_date, outputdir=args.outputdir)
-    if not c.testLogin():
-        c.login()
-        while (not c.testLogin()):
-            c.login(useSavedId=False)
-    c.saveCookie()
-    c.fetchServices()
-    c.fetchChildren()
+    dumpmon = Dumpmon(start_date=s_date, end_date=e_date, outputdir=args.outputdir)
+    if not dumpmon.testLogin():
+        dumpmon.login()
+        while (not dumpmon.testLogin()):
+            dumpmon.login(useSavedId=False)
+    dumpmon.saveCookie()
+    dumpmon.fetchServices()
+    dumpmon.fetchChildren()
 
     # --- fetch phase
 
     if allExecute or args.fetch:
         log.info("fetchTimeline...")
-        c.fetchTimeline()
+        dumpmon.fetchTimeline()
         log.info("fetchComments...")
-        c.fetchComments()
+        dumpmon.fetchComments()
         log.info("fetchContactResponses...")
-        c.fetchContactResponses()
+        dumpmon.fetchContactResponses()
         log.info("fetchHandouts...")
-        c.fetchHandouts()
+        dumpmon.fetchHandouts()
 
     # --- download attach file phase
 
     if allExecute or args.download:
         log.info("download...")
-        c.downloadTimeline()
-        c.downloadTimelinePhoto()
-        c.downloadAllHandout()
+        dumpmon.downloadTimeline()
+        dumpmon.downloadTimelinePhoto()
+        dumpmon.downloadAllHandout()
 
     if allExecute:
         with Config() as conf:
@@ -1370,11 +1514,21 @@ def main():
 
     if allExecute or args.makenote:
         log.info("makenote...")
-        c.makenote()
+        dumpmon.makenote()
     if allExecute or args.builddoc:
         log.info("build document...")
-        callSphinxSetup(c.outputdir)
-        callSphinxBuild(c.outputdir)
+        callSphinxSetup(dumpmon.outputdir)
+        callSphinxBuild(dumpmon.outputdir)
+
+    # --- export sleep csvm.
+    if args.makesleep:
+        log.info("sleep...")
+        dumpmon.makeSleep()
+
+    # --- PDF extract
+    if args.extract:
+        log.info("pdf extract...")
+        pdfextract(dumpmon)
 
 
 if __name__ == "__main__":
